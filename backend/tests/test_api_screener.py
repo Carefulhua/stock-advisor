@@ -1,3 +1,5 @@
+import types
+
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -47,6 +49,19 @@ def fake_market(monkeypatch):
     monkeypatch.setattr(main_mod, "fetch_listing_dates", lambda: listing)
     monkeypatch.setattr(main_mod, "fetch_earnings_growth", lambda period: earnings)
     return snap
+
+
+@pytest.fixture
+def record_sync_jobs(monkeypatch):
+    """拦截后台同步任务，只记录调用，避免真实拉数据。"""
+    calls: list[list[str]] = []
+
+    def _fake_start(codes, skip_financials=False):
+        calls.append(list(codes))
+        return f"job-{len(calls)}"
+
+    monkeypatch.setattr(main_mod.sync_job, "start", _fake_start)
+    return types.SimpleNamespace(calls=calls)
 
 
 @pytest.fixture
@@ -249,20 +264,24 @@ def test_apply_endpoint_when_sync_busy_returns_409(client, seed_stocks, monkeypa
     assert resp.status_code == 409
 
 
-def test_favorites_crud_roundtrip(client, seed_stocks):
+def test_favorites_crud_roundtrip(client, seed_stocks, record_sync_jobs):
     empty = client.get("/api/favorites")
     assert empty.status_code == 200
     assert empty.json() == []
 
     added = client.post("/api/favorites", json={"codes": ["000001"]})
     assert added.status_code == 200
-    assert added.json() == {"added": 1, "skipped": 0}
+    assert added.json() == {"added": 1, "skipped": 0, "sync_job_id": "job-1"}
+    assert record_sync_jobs.calls == [["000001"]]
 
     again = client.post("/api/favorites", json={"codes": ["000001"]})
-    assert again.json() == {"added": 0, "skipped": 1}
+    assert again.json()["added"] == 0
+    assert again.json()["skipped"] == 1
+    assert record_sync_jobs.calls == [["000001"]]
 
     unknown = client.post("/api/favorites", json={"codes": ["999999"]})
-    assert unknown.json() == {"added": 0, "skipped": 1}
+    assert unknown.json()["added"] == 0
+    assert unknown.json()["skipped"] == 1
 
     listed = client.get("/api/favorites").json()
     assert listed[0]["code"] == "000001"
@@ -273,6 +292,63 @@ def test_favorites_crud_roundtrip(client, seed_stocks):
     assert deleted.json() == {"deleted": True}
 
     assert client.delete("/api/favorites/000001").json() == {"deleted": False}
+
+
+def test_favorites_add_only_syncs_newly_added_codes(client, seed_stocks, record_sync_jobs):
+    client.post("/api/favorites", json={"codes": ["000001"]})
+
+    resp = client.post("/api/favorites", json={"codes": ["000001", "000002"]})
+
+    assert resp.json() == {"added": 1, "skipped": 1, "sync_job_id": "job-2"}
+    assert record_sync_jobs.calls == [["000001"], ["000002"]]
+
+
+def test_favorites_add_conflicts_when_sync_running(client, seed_stocks, monkeypatch):
+    def _busy(codes, skip_financials=False):
+        raise main_mod.sync_job.SyncBusyError("已有同步任务在运行")
+
+    monkeypatch.setattr(main_mod.sync_job, "start", _busy)
+
+    resp = client.post("/api/favorites", json={"codes": ["000001"]})
+
+    assert resp.status_code == 409
+
+
+def test_watchlist_merges_favorites_first(client, seed_stocks):
+    conn = main_mod.get_conn()
+    conn.execute(
+        "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES('000002','万科A',0.0,1,'2026-10-13')"
+    )
+    conn.execute(
+        "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES('000003','ST某某',0.0,2,'2026-10-13')"
+    )
+    conn.execute(
+        "INSERT INTO favorites(code, name, added_at) VALUES('600519','贵州茅台','2026-10-13')"
+    )
+    conn.commit()
+    conn.close()
+
+    rows = client.get("/api/watchlist").json()
+
+    assert [r["code"] for r in rows] == ["600519", "000002", "000003"]
+    assert [r["is_favorite"] for r in rows] == [True, False, False]
+
+
+def test_watchlist_does_not_duplicate_codes_in_both_tables(client, seed_stocks):
+    conn = main_mod.get_conn()
+    conn.execute(
+        "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES('600519','贵州茅台',0.0,1,'2026-10-13')"
+    )
+    conn.execute(
+        "INSERT INTO favorites(code, name, added_at) VALUES('600519','贵州茅台','2026-10-13')"
+    )
+    conn.commit()
+    conn.close()
+
+    rows = client.get("/api/watchlist").json()
+
+    assert [r["code"] for r in rows] == ["600519"]
+    assert rows[0]["is_favorite"] is True
 
 
 def test_sync_status_endpoint_reports_job_state(client, monkeypatch):

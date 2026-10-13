@@ -99,11 +99,18 @@ def stocks() -> list[dict]:
 
 @app.get("/api/watchlist")
 def watchlist() -> list[dict]:
+    """展示池 = 筛选池 ∪ 自选，自选置顶且标 is_favorite，供分析页下拉与默认选股。"""
     conn = get_conn()
     try:
-        return _records(read_watchlist(conn))
+        pool = read_watchlist(conn)
+        favorites = read_favorites(conn)
     finally:
         conn.close()
+    favorite_codes = set(favorites["code"])
+    merged = pd.concat([favorites[["code", "name"]], pool[["code", "name"]]], ignore_index=True)
+    merged = merged.drop_duplicates(subset=["code"], keep="first")
+    merged["is_favorite"] = merged["code"].isin(favorite_codes)
+    return _records(merged[["code", "name", "is_favorite"]])
 
 
 @app.get("/api/quotes/{code}")
@@ -295,11 +302,20 @@ def favorites_add(req: FavoriteRequest) -> dict:
     codes = [c.zfill(6) for c in req.codes]
     conn = get_conn()
     try:
+        before = set(read_favorites(conn)["code"])
         pairs = _names_for(conn, codes)
         added, skipped = add_favorites(conn, pairs)
     finally:
         conn.close()
-    return {"added": added, "skipped": skipped + (len(codes) - len(pairs))}
+    # 加自选即同步：用户加自选就是要在分析页看它，不同步则点开只有「无数据」
+    new_codes = [code for code, _ in pairs if code not in before]
+    sync_job_id: str | None = None
+    if new_codes:
+        try:
+            sync_job_id = sync_job.start(new_codes)
+        except sync_job.SyncBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+    return {"added": added, "skipped": skipped + (len(codes) - len(pairs)), "sync_job_id": sync_job_id}
 
 
 @app.delete("/api/favorites/{code}")
