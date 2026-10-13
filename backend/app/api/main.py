@@ -1,9 +1,13 @@
-"""分析页 API：股票列表 / 日线 / 技术指标 / AI 解读对话。"""
+"""分析页 API：股票列表 / 日线 / 技术指标 / AI 解读对话 / 选股器。"""
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterator
+from datetime import date
 from typing import Literal
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -12,15 +16,39 @@ from pydantic import BaseModel, Field
 from app.analysis import indicators as ind
 from app.assistant.context import build_context
 from app.assistant.llm import LLMError, stream_chat
+from app.core import config
 from app.core.config import CHAT_HISTORY_LIMIT, GLM_API_KEY
-from app.data.storage import get_conn, list_stocks, read_quotes, read_watchlist
+from app.data.storage import (
+    add_favorites,
+    get_conn,
+    list_stocks,
+    read_favorites,
+    read_quotes,
+    read_watchlist,
+    remove_favorite,
+    replace_watchlist_by_codes,
+)
+from app.screener import fields as field_catalog
+from app.screener import sync_job
+from app.screener.conditions import FilterSpec
+from app.screener.parse import ParseError, parse_query
+from app.screener.run import _latest_report_period, run_filter
+from app.screener.snapshot import (
+    fetch_earnings_growth,
+    fetch_listing_dates,
+    market_snapshot_cached,
+    merge_snapshot,
+    snapshot_cache_state,
+)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="stock-advisor api")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -139,3 +167,150 @@ def chat(req: ChatRequest) -> Response:
         yield from iterator
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+class ParseRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+
+
+class FavoriteRequest(BaseModel):
+    codes: list[str] = Field(min_length=1, max_length=500)
+
+
+class ApplyRequest(BaseModel):
+    codes: list[str] = Field(min_length=1, max_length=1000)
+
+
+def _names_for(conn, codes: list[str]) -> list[tuple[str, str]]:
+    """从 stocks 表解析 code → (code, name)，未收录的代码直接丢弃。"""
+    rows = conn.execute(
+        "SELECT code, name FROM stocks WHERE code IN ({})".format(
+            ",".join("?" * len(codes))
+        ),
+        codes,
+    ).fetchall()
+    found = {row[0]: row[1] for row in rows}
+    return [(code, found[code]) for code in codes if code in found]
+
+
+@app.get("/api/screener/fields")
+def screener_fields() -> list[dict]:
+    return field_catalog.catalog()
+
+
+@app.get("/api/screener/status")
+def screener_status() -> dict:
+    return {"llm_enabled": bool(GLM_API_KEY), "snapshot_cached": snapshot_cache_state()}
+
+
+@app.post("/api/screener/parse")
+def screener_parse(req: ParseRequest) -> dict:
+    if not GLM_API_KEY:
+        raise HTTPException(status_code=503, detail="服务端未配置 GLM_API_KEY")
+    try:
+        spec = parse_query(req.query, api_key=GLM_API_KEY)
+    except ParseError as exc:
+        code = 502 if exc.reason == "llm" else 422
+        raise HTTPException(status_code=code, detail=str(exc))
+    return _spec_payload(spec)
+
+
+def _spec_payload(spec: FilterSpec) -> dict:
+    return {
+        "conditions": [c.model_dump() for c in spec.conditions],
+        "sort_by": spec.sort_by,
+        "top": spec.top,
+    }
+
+
+@app.post("/api/screener/run")
+def screener_run(spec: FilterSpec) -> dict:
+    started = time.perf_counter()
+    try:
+        snap = market_snapshot_cached()
+        listing = fetch_listing_dates()
+        earnings = fetch_earnings_growth(_latest_report_period(date.today()))
+    except Exception as exc:
+        logger.warning("screener snapshot fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"行情快照拉取失败: {exc}")
+
+    field_catalog.set_industry_options(
+        sorted({str(v) for v in snap["industry"].dropna()}) if "industry" in snap.columns else []
+    )
+    merged = merge_snapshot(snap, listing, earnings)
+
+    conn = get_conn()
+    try:
+        pool = read_watchlist(conn)["code"].tolist()
+        favorites = read_favorites(conn)["code"].tolist()
+    finally:
+        conn.close()
+
+    result = run_filter(merged, spec, pool, favorites)
+    rows = result["rows"]
+    return {
+        "rows": _records(rows),
+        "columns": list(rows.columns),
+        "next_in": result["next_in"],
+        "next_out": result["next_out"],
+        "kept_favorites": result["kept_favorites"],
+        "total_matched": result["total_matched"],
+        "elapsed_sec": round(time.perf_counter() - started, 2),
+        "cached": snapshot_cache_state(),
+    }
+
+
+@app.post("/api/screener/apply")
+def screener_apply(req: ApplyRequest) -> dict:
+    conn = get_conn()
+    try:
+        pairs = _names_for(conn, [c.zfill(6) for c in req.codes])
+        if not pairs:
+            raise HTTPException(status_code=422, detail="代码均不在股票列表中")
+        frame = pd.DataFrame(pairs, columns=["code", "name"]).assign(score=0.0, rank=range(1, len(pairs) + 1))
+        applied = replace_watchlist_by_codes(conn, frame)
+        config.ensure_dirs()
+        config.WATCHLIST_PATH.write_text(",".join(code for code, _ in pairs), encoding="utf-8")
+    finally:
+        conn.close()
+
+    try:
+        job_id = sync_job.start([code for code, _ in pairs])
+    except sync_job.SyncBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"applied": applied, "sync_job_id": job_id}
+
+
+@app.get("/api/favorites")
+def favorites_list() -> list[dict]:
+    conn = get_conn()
+    try:
+        return _records(read_favorites(conn))
+    finally:
+        conn.close()
+
+
+@app.post("/api/favorites")
+def favorites_add(req: FavoriteRequest) -> dict:
+    codes = [c.zfill(6) for c in req.codes]
+    conn = get_conn()
+    try:
+        pairs = _names_for(conn, codes)
+        added, skipped = add_favorites(conn, pairs)
+    finally:
+        conn.close()
+    return {"added": added, "skipped": skipped + (len(codes) - len(pairs))}
+
+
+@app.delete("/api/favorites/{code}")
+def favorites_delete(code: str) -> dict:
+    conn = get_conn()
+    try:
+        return {"deleted": remove_favorite(conn, code)}
+    finally:
+        conn.close()
+
+
+@app.get("/api/sync/status")
+def sync_status() -> dict:
+    return sync_job.get_status()
