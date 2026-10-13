@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import ChatPanel from "./ChatPanel";
 import { buildChartOption, IndicatorTab, Row } from "./chartOption";
-
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { API } from "./api";
 
 type Stock = { code: string; name: string; in_watchlist: boolean };
 type WatchItem = { code: string; name: string; rank: number };
@@ -115,6 +114,12 @@ export default function Home() {
     <main>
       <div className="topbar">
         <span className="brand">个股分析</span>
+        <nav className="screen-nav">
+          <a href="/" className="active">
+            分析
+          </a>
+          <a href="/screen">选股</a>
+        </nav>
         <div className="search-wrap">
           <input
             placeholder="搜索代码 / 名称…"

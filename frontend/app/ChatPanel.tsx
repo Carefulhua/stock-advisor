@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+import { API } from "./api";
 
 type ChatMsg = { role: "user" | "assistant"; content: string };
 

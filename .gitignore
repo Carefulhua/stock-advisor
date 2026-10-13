@@ -8,3 +8,4 @@ node_modules/
 .superpowers/
 *.sqlite
 .e2e-*.png
+tsconfig.tsbuildinfo
