@@ -7,7 +7,7 @@ import { buildChartOption, IndicatorTab, Row } from "./chartOption";
 import { API } from "./api";
 
 type Stock = { code: string; name: string; in_watchlist: boolean };
-type WatchItem = { code: string; name: string; rank: number };
+type WatchItem = { code: string; name: string; is_favorite: boolean };
 
 const RANGES = [
   { key: "3m", label: "近3月", days: 92 },
@@ -71,11 +71,20 @@ export default function Home() {
     const url = `${API}/api/indicators/${c}${start ? `?start=${start}` : ""}`;
     fetch(url)
       .then((res) => {
-        if (!res.ok) throw new Error("404");
+        if (res.status === 404) throw new Error("EMPTY");
+        if (!res.ok) throw new Error("BACKEND");
         return res.json();
       })
       .then((data: { rows: Row[] }) => setRows(data.rows))
-      .catch(() => setError(`加载 ${c} 失败：无数据或后端未启动`));
+      .catch((e: Error) =>
+        setError(
+          e.message === "EMPTY"
+            ? `${c} 暂无行情数据：这只股票还没同步过，请到「选股」页把它加入自选或应用池子，系统会自动同步`
+            : e.message === "BACKEND"
+              ? "无法连接后端 API（:8000），请确认服务已启动"
+              : e.message,
+        ),
+      );
   }, []);
 
   useEffect(() => {

@@ -251,7 +251,7 @@ export default function ScreenPage() {
 
           <div className="card">
             <h3>我的自选（强制保留在池内）</h3>
-            <FavoritesPanel favorites={favorites} onChange={loadFavorites} onError={setMsg} />
+            <FavoritesPanel favorites={favorites} onChange={loadFavorites} onError={setMsg} onSynced={startPolling} />
           </div>
         </section>
 

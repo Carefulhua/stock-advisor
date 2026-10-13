@@ -61,7 +61,7 @@ export type SyncStatus = {
   job_id: string;
 };
 
-export type AddResult = { added: number; skipped: number };
+export type AddResult = { added: number; skipped: number; sync_job_id: string | null };
 export type DeleteResult = { deleted: boolean };
 export type ApplyResult = { applied: number; sync_job_id: string };
 

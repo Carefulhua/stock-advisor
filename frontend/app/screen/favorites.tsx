@@ -10,6 +10,7 @@ type Props = {
   favorites: Favorite[];
   onChange: () => void;
   onError: (msg: string) => void;
+  onSynced: () => void;
 };
 
 function splitCodes(raw: string): string[] {
@@ -23,7 +24,7 @@ function splitCodes(raw: string): string[] {
   );
 }
 
-export default function FavoritesPanel({ favorites, onChange, onError }: Props) {
+export default function FavoritesPanel({ favorites, onChange, onError, onSynced }: Props) {
   const [query, setQuery] = useState("");
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [picked, setPicked] = useState("");
@@ -51,12 +52,16 @@ export default function FavoritesPanel({ favorites, onChange, onError }: Props) 
     setBusy(true);
     try {
       const res = await postJson<AddResult>("/api/favorites", { codes });
-      const msg = `新增 ${res.added} 只` + (res.skipped > 0 ? `，跳过 ${res.skipped} 只（无效或已存在）` : "");
+      const parts = [`新增 ${res.added} 只`];
+      if (res.skipped > 0) parts.push(`跳过 ${res.skipped} 只（无效或已存在）`);
+      if (res.sync_job_id) parts.push("已开始后台同步这批股票的日线与财务，稍候即可在分析页查看");
+      else if (res.added > 0) parts.push("未触发同步（已有同步任务在运行），可稍后重新添加或到选股页应用池子");
       setQuery("");
       setPicked("");
       setBulk("");
       onError("");
-      window.alert(msg);
+      window.alert(parts.join("，"));
+      if (res.sync_job_id) onSynced();
       onChange();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
