@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS watchlist (
     rank INTEGER NOT NULL,
     selected_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS favorites (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    added_at TEXT NOT NULL
+);
 """
 
 
@@ -162,24 +167,86 @@ def read_financials(code: str, financials_dir: Path | None = None) -> pd.DataFra
     return pd.read_parquet(path)
 
 
+def _normalize_code(raw: object) -> str | None:
+    code = str(raw).strip().zfill(6)
+    if len(code) != 6 or not code.isdigit():
+        return None
+    return code
+
+
+def add_favorites(
+    conn: sqlite3.Connection,
+    codes_and_names: list[tuple[str, str]],
+    added_at: str | None = None,
+) -> tuple[int, int]:
+    """批量添加手工自选股, 返回 (新增数, 跳过数)。code 非6位数字视为非法并跳过。"""
+    ts = added_at or datetime.now().isoformat(timespec="seconds")
+    added = 0
+    skipped = 0
+    with conn:
+        for raw_code, name in codes_and_names:
+            code = _normalize_code(raw_code)
+            if code is None:
+                skipped += 1
+                continue
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO favorites(code, name, added_at) VALUES(?, ?, ?)",
+                (code, str(name), ts),
+            )
+            if cursor.rowcount:
+                added += 1
+            else:
+                skipped += 1
+    return added, skipped
+
+
+def remove_favorite(conn: sqlite3.Connection, code: str) -> bool:
+    normalized = _normalize_code(code)
+    if normalized is None:
+        return False
+    with conn:
+        cursor = conn.execute("DELETE FROM favorites WHERE code = ?", (normalized,))
+    return bool(cursor.rowcount)
+
+
+def read_favorites(conn: sqlite3.Connection) -> pd.DataFrame:
+    return pd.read_sql_query(
+        "SELECT code, name, added_at FROM favorites ORDER BY added_at, code",
+        conn,
+    )
+
+
 def replace_watchlist(
     conn: sqlite3.Connection,
     df: pd.DataFrame,
     selected_at: datetime | None = None,
 ) -> int:
     """整表替换自选池, 返回写入条数。"""
+    return replace_watchlist_by_codes(conn, df, selected_at)
+
+
+def replace_watchlist_by_codes(
+    conn: sqlite3.Connection,
+    rows: pd.DataFrame,
+    selected_at: datetime | None = None,
+) -> int:
+    """按 rank 升序整表替换自选池, 缺失 score 记0, 返回写入条数。"""
     ts = (selected_at or datetime.now()).isoformat(timespec="seconds")
-    rows = [
-        (str(r["code"]).zfill(6), str(r["name"]), float(r["score"]), int(r["rank"]), ts)
-        for r in df.to_dict("records")
-    ]
+    prepared = []
+    for record in sorted(rows.to_dict("records"), key=lambda r: int(r["rank"])):
+        code = _normalize_code(record["code"])
+        if code is None:
+            continue
+        prepared.append(
+            (code, str(record["name"]), float(record.get("score") or 0.0), int(record["rank"]), ts)
+        )
     with conn:
         conn.execute("DELETE FROM watchlist")
         conn.executemany(
             "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES(?, ?, ?, ?, ?)",
-            rows,
+            prepared,
         )
-    return len(rows)
+    return len(prepared)
 
 
 def read_watchlist(conn: sqlite3.Connection) -> pd.DataFrame:
