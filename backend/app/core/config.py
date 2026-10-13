@@ -25,14 +25,7 @@ def ensure_dirs() -> None:
     FINANCIALS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# 选股筛选器默认参数（spec 2026-10-12），CLI 可覆盖
 SCREEN_TOP_N = 100
-SCREEN_MIN_FLOAT_MV = 50e8   # 流通市值下限：50 亿元
-SCREEN_MIN_AMOUNT = 1e8      # 当日成交额下限：1 亿元
-SCREEN_MIN_LISTING_YEARS = 1
-SCREEN_WEIGHT_AMOUNT = 0.3
-SCREEN_WEIGHT_PE = 0.3
-SCREEN_WEIGHT_GROWTH = 0.4
 
 WATCHLIST_PATH = DATA_DIR / "watchlist.txt"
 

@@ -1,4 +1,4 @@
-"""选股 CLI：拉数 → 过滤 → 打分 → Top N → 落库 + 导出。"""
+"""选股编排：拉数 → 条件筛选 → 自选强制保留 → 池子差异。CLI 直接把结果应用到池子。"""
 from __future__ import annotations
 
 import argparse
@@ -8,10 +8,18 @@ from datetime import date
 import pandas as pd
 
 from app.core import config
-from app.data.storage import get_conn, replace_watchlist
-from app.screener import rules, snapshot
+from app.data.storage import get_conn, read_favorites, replace_watchlist_by_codes
+from app.screener import conditions, fields, snapshot
 
 logger = logging.getLogger(__name__)
+
+DISPLAY_COLUMNS = [
+    "code", "name", "rank", "is_favorite",
+    "pe_ttm", "pn", "turnover", "ltsz", "zsz", "hsl", "lb",
+    "zdf_y", "zdf_d20", "zdf_d60", "zljlr",
+    "eps", "cfps", "revenue_yoy", "net_profit_yoy", "net_profit", "roe", "gross_margin",
+    "industry", "list_date",
+]
 
 
 def _latest_report_period(today: date) -> str:
@@ -27,55 +35,113 @@ def _latest_report_period(today: date) -> str:
     return f"{y}0930"
 
 
-def run_screening(merged: pd.DataFrame, params: argparse.Namespace, as_of: date) -> pd.DataFrame:
-    """编排：硬过滤 → 打分 → Top N。返回 code/name/score/rank。"""
-    filtered = rules.apply_hard_filters(
-        merged,
-        as_of=as_of,
-        min_float_mv=params.min_float_mv,
-        min_amount=params.min_amount,
-        min_listing_years=params.min_listing_years,
+def _display_columns(merged: pd.DataFrame) -> list[str]:
+    return [c for c in DISPLAY_COLUMNS if c in merged.columns]
+
+
+def run_filter(
+    merged: pd.DataFrame,
+    spec: conditions.FilterSpec,
+    current_pool: list[str],
+    favorites: list[str],
+) -> dict:
+    """条件筛选 + 自选强制保留的纯函数。
+
+    rows = 条件命中的 Top N ∪ 自选全集（自选置顶，不受条件与 top 限制）；
+    next_in = rows 中非自选且不在现池；next_out = 现池中既不在 rows 也不在自选。
+    """
+    fav_codes = {_normalize(code) for code in favorites}
+    fav_codes.discard("")
+
+    candidates = merged
+    if "name" in candidates.columns:
+        candidates = candidates[~candidates["name"].astype(str).str.contains("ST", na=False)]
+    matched = conditions.evaluate(candidates, spec.conditions)
+    total_matched = len(matched)
+
+    selected = matched.sort_values(spec.sort_by, ascending=False).head(spec.top)
+
+    rows = _assemble_rows(merged, selected, fav_codes)
+    row_codes = rows["code"].tolist()
+    pool = {_normalize(c) for c in current_pool}
+
+    next_in = [c for c in row_codes if c not in fav_codes and c not in pool]
+    next_out = [c for c in pool if c not in row_codes and c not in fav_codes]
+    return {
+        "rows": rows,
+        "next_in": next_in,
+        "next_out": next_out,
+        "kept_favorites": [c for c in fav_codes if c],
+        "total_matched": total_matched,
+    }
+
+
+def _normalize(code: str) -> str:
+    text = str(code).strip().zfill(6)
+    return text if len(text) == 6 and text.isdigit() else ""
+
+
+def _assemble_rows(
+    merged: pd.DataFrame,
+    selected: pd.DataFrame,
+    fav_codes: set[str],
+) -> pd.DataFrame:
+    """自选置顶 + 选中股按原顺序拼接，rank 从 1 连续重编。"""
+    columns = _display_columns(merged)
+    fav_rows = (
+        merged[merged["code"].isin(fav_codes)][columns]
+        if not merged.empty
+        else merged
     )
-    logger.info("硬过滤后候选: %s", len(filtered))
-    scored = rules.score_stocks(
-        filtered,
-        weight_amount=params.weight_amount,
-        weight_pe=params.weight_pe,
-        weight_growth=params.weight_growth,
-    )
-    top = rules.select_top(scored, params.top)
-    return top[["code", "name", "score", "rank"]]
+    sel_rows = selected[columns] if not selected.empty else selected
+    rows = pd.concat([fav_rows, sel_rows])
+    rows = rows.drop_duplicates(subset="code", keep="first").reset_index(drop=True)
+    rows["is_favorite"] = rows["code"].isin(fav_codes)
+    rows["rank"] = range(1, len(rows) + 1)
+    ordered = ["code", "name", "rank", "is_favorite"] + [
+        c for c in columns if c not in ("code", "name")
+    ]
+    return rows[ordered]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="选股筛选器")
     parser.add_argument("--top", type=int, default=config.SCREEN_TOP_N)
-    parser.add_argument("--min-float-mv", type=float, default=config.SCREEN_MIN_FLOAT_MV)
-    parser.add_argument("--min-amount", type=float, default=config.SCREEN_MIN_AMOUNT)
-    parser.add_argument("--min-listing-years", type=int, default=config.SCREEN_MIN_LISTING_YEARS)
-    parser.add_argument("--weight-amount", type=float, default=config.SCREEN_WEIGHT_AMOUNT)
-    parser.add_argument("--weight-pe", type=float, default=config.SCREEN_WEIGHT_PE)
-    parser.add_argument("--weight-growth", type=float, default=config.SCREEN_WEIGHT_GROWTH)
+    parser.add_argument("--conditions-json", default="[]", help='条件列表 JSON，如 [{"field":"pe_ttm","op":"lte","value":15}]')
+    parser.add_argument("--sort-by", default="net_profit_yoy")
     parser.add_argument("--report-period", default=None, help="业绩报告期 YYYYMMDD，缺省自动推断最近已披露期")
     args = parser.parse_args()
 
-    snap = snapshot.fetch_market_snapshot()
+    spec = conditions.FilterSpec.model_validate_json(args.conditions_json)
+    spec = spec.model_copy(update={"sort_by": args.sort_by, "top": args.top})
+
+    snap = snapshot.market_snapshot_cached()
     listing = snapshot.fetch_listing_dates()
     period = args.report_period or _latest_report_period(date.today())
     earnings = snapshot.fetch_earnings_growth(period)
     merged = snapshot.merge_snapshot(snap, listing, earnings)
+    fields.set_industry_options(sorted(merged["industry"].dropna().unique()) if "industry" in merged else [])
 
-    watchlist = run_screening(merged, args, date.today())
+    conn = get_conn()
+    try:
+        pool = conn.execute("SELECT code FROM watchlist").fetchall()
+        current_pool = [r["code"] for r in pool]
+        favorites = read_favorites(conn)["code"].tolist()
+    finally:
+        conn.close()
+
+    result = run_filter(merged, spec, current_pool, favorites)
+    logger.info("命中 %s 只，结果池 %s 只", result["total_matched"], len(result["rows"]))
 
     config.ensure_dirs()
     conn = get_conn()
     try:
-        n = replace_watchlist(conn, watchlist)
+        n = replace_watchlist_by_codes(conn, result["rows"][["code", "name", "rank"]])
     finally:
         conn.close()
-    config.WATCHLIST_PATH.write_text(",".join(watchlist["code"]), encoding="utf-8")
+    config.WATCHLIST_PATH.write_text(",".join(result["rows"]["code"]), encoding="utf-8")
     print(f"watchlist 写入 {n} 只 → {config.WATCHLIST_PATH}")
-    print(watchlist.head(10).to_string(index=False))
+    print(result["rows"].head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
