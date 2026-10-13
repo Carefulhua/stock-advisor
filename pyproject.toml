@@ -1,0 +1,24 @@
+[project]
+name = "stock-advisor"
+version = "0.1.0"
+description = "个人A股投资学习工具 - 数据底座"
+requires-python = ">=3.12"
+dependencies = [
+    "akshare>=1.14",
+    "pandas>=2.2",
+    "pyarrow>=15.0",
+    "apscheduler>=3.10",
+    "baostock>=0.9.4",
+    "fastapi>=0.143.0",
+    "uvicorn>=0.54.0",
+    "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
