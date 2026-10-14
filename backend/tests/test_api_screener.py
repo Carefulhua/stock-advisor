@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.api import main as main_mod
 from app.data.storage import get_conn, read_watchlist, upsert_stocks
+from app.screener import run as run_mod
+from app.screener import score as screener_score
 
 
 @pytest.fixture
@@ -17,16 +19,13 @@ def client(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_market(monkeypatch):
+    """全市场快照/业绩/财务三张表。列的归属必须与真实接口一致，否则 merge 会产生 _x/_y 后缀。"""
     snap = pd.DataFrame(
         [
-            {"code": "000001", "name": "平安银行", "turnover": 3e9, "ltsz": 2e11, "pe_ttm": 5.0,
-             "industry": "银行"},
-            {"code": "000002", "name": "万科A", "turnover": 1e9, "ltsz": 1e11, "pe_ttm": 8.0,
-             "industry": "房地产"},
-            {"code": "000003", "name": "ST某某", "turnover": 1e9, "ltsz": 1e10, "pe_ttm": 9.0,
-             "industry": "综合"},
-            {"code": "600519", "name": "贵州茅台", "turnover": 5e9, "ltsz": 1e12, "pe_ttm": 25.0,
-             "industry": "白酒"},
+            {"code": "000001", "name": "平安银行", "turnover": 3e9, "ltsz": 2e11, "pe_ttm": 5.0, "industry": "银行"},
+            {"code": "000002", "name": "万科A", "turnover": 1e9, "ltsz": 1e11, "pe_ttm": 8.0, "industry": "房地产"},
+            {"code": "000003", "name": "ST某某", "turnover": 1e9, "ltsz": 1e10, "pe_ttm": 9.0, "industry": "综合"},
+            {"code": "600519", "name": "贵州茅台", "turnover": 5e9, "ltsz": 1e12, "pe_ttm": 25.0, "industry": "白酒"},
         ]
     )
     listing = pd.DataFrame(
@@ -39,15 +38,28 @@ def fake_market(monkeypatch):
     )
     earnings = pd.DataFrame(
         [
-            {"code": "000001", "net_profit_yoy": 10.0},
-            {"code": "000002", "net_profit_yoy": 30.0},
-            {"code": "000003", "net_profit_yoy": 50.0},
-            {"code": "600519", "net_profit_yoy": 20.0},
+            {"code": "000001", "net_profit_yoy": 10.0, "roe": 9.0, "revenue_yoy": 1.0,
+             "gross_margin": None, "cfps": 1.9},
+            {"code": "000002", "net_profit_yoy": 30.0, "roe": 5.0, "revenue_yoy": -8.0,
+             "gross_margin": 20.0, "cfps": 0.5},
+            {"code": "000003", "net_profit_yoy": 50.0, "roe": 50.0, "revenue_yoy": 90.0,
+             "gross_margin": 80.0, "cfps": 9.0},
+            {"code": "600519", "net_profit_yoy": 20.0, "roe": 30.0, "revenue_yoy": 16.0,
+             "gross_margin": 91.0, "cfps": 30.0},
         ]
     )
-    monkeypatch.setattr(main_mod, "market_snapshot_cached", lambda: snap)
-    monkeypatch.setattr(main_mod, "fetch_listing_dates", lambda: listing)
-    monkeypatch.setattr(main_mod, "fetch_earnings_growth", lambda period: earnings)
+    fundamentals = pd.DataFrame(
+        [
+            {"code": "000001", "debt_ratio": 92.0, "net_margin": 28.0},
+            {"code": "000002", "debt_ratio": 78.0, "net_margin": 4.0},
+            {"code": "000003", "debt_ratio": 10.0, "net_margin": 60.0},
+            {"code": "600519", "debt_ratio": 20.0, "net_margin": 50.0},
+        ]
+    )
+    monkeypatch.setattr(run_mod.snapshot, "market_snapshot_cached", lambda: snap)
+    monkeypatch.setattr(run_mod.snapshot, "fetch_listing_dates", lambda: listing)
+    monkeypatch.setattr(run_mod.snapshot, "fetch_earnings_growth", lambda period: earnings)
+    monkeypatch.setattr(run_mod.snapshot, "fetch_fundamentals", lambda period: fundamentals)
     return snap
 
 
@@ -202,11 +214,25 @@ def test_run_endpoint_snapshot_failure_returns_502(client, monkeypatch):
     def _boom():
         raise RuntimeError("snapshot down")
 
-    monkeypatch.setattr(main_mod, "market_snapshot_cached", _boom)
+    monkeypatch.setattr(run_mod.snapshot, "market_snapshot_cached", _boom)
 
     resp = client.post("/api/screener/run", json={"conditions": [], "top": 10})
 
     assert resp.status_code == 502
+
+
+def test_run_endpoint_survives_fundamentals_failure(client, fake_market, monkeypatch):
+    """财务比率是两个可选维度，拉不到时只降级为缺列，不该让整个筛选 502。"""
+    def _boom(period):
+        raise RuntimeError("zcfz down")
+
+    monkeypatch.setattr(run_mod.snapshot, "fetch_fundamentals", _boom)
+
+    resp = client.post("/api/screener/run", json={"conditions": [], "top": 10})
+
+    assert resp.status_code == 200
+    assert resp.json()["fundamentals_ready"] is False
+    assert "debt_ratio" not in resp.json()["columns"]
 
 
 def test_run_endpoint_invalid_condition_returns_422(client, fake_market):
@@ -349,6 +375,57 @@ def test_watchlist_does_not_duplicate_codes_in_both_tables(client, seed_stocks):
 
     assert [r["code"] for r in rows] == ["600519"]
     assert rows[0]["is_favorite"] is True
+
+
+def test_score_endpoint_returns_ranked_rows_without_st(client, fake_market):
+    resp = client.get("/api/screener/score", params={"top": 10})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    codes = [r["code"] for r in body["rows"]]
+    assert "000003" not in codes
+    assert body["rows"][0]["code"] == "600519"
+    assert body["rows"][0]["rank"] == 1
+    assert body["universe_size"] == 3
+    assert body["fundamentals_ready"] is True
+    assert set(body["factors"]) == set(screener_score.default_weights())
+    assert "pct_debt_ratio" in body["columns"]
+    assert all(0 <= r["score"] <= 100 for r in body["rows"])
+
+
+def test_score_endpoint_respects_top(client, fake_market):
+    resp = client.get("/api/screener/score", params={"top": 1})
+
+    assert len(resp.json()["rows"]) == 1
+
+
+def test_score_endpoint_rejects_out_of_range_top(client, fake_market):
+    assert client.get("/api/screener/score", params={"top": 0}).status_code == 422
+    assert client.get("/api/screener/score", params={"top": 501}).status_code == 422
+
+
+def test_score_endpoint_snapshot_failure_returns_502(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("snapshot down")
+
+    monkeypatch.setattr(run_mod.snapshot, "market_snapshot_cached", _boom)
+
+    assert client.get("/api/screener/score").status_code == 502
+
+
+def test_score_endpoint_still_works_without_fundamentals(client, fake_market, monkeypatch):
+    def _boom(period):
+        raise RuntimeError("zcfz down")
+
+    monkeypatch.setattr(run_mod.snapshot, "fetch_fundamentals", _boom)
+
+    resp = client.get("/api/screener/score")
+
+    body = resp.json()
+    assert body["fundamentals_ready"] is False
+    assert "debt_ratio" not in body["factors"]
+    assert "net_margin" not in body["factors"]
+    assert body["rows"]
 
 
 @pytest.fixture

@@ -5,7 +5,6 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import date
 from typing import Literal
 
 import pandas as pd
@@ -34,18 +33,12 @@ from app.data.storage import (
     replace_watchlist_by_codes,
 )
 from app.screener import fields as field_catalog
+from app.screener import score as screener_score
 from app.screener import sync_job
 from app.screener.conditions import FilterSpec
 from app.screener.parse import ParseError, parse_query
-from app.screener.run import _latest_report_period, run_filter
-from app.screener.snapshot import (
-    fetch_earnings_growth,
-    fetch_listing_dates,
-    market_code_index,
-    market_snapshot_cached,
-    merge_snapshot,
-    snapshot_cache_state,
-)
+from app.screener.run import load_merged_market, run_filter
+from app.screener.snapshot import market_code_index, snapshot_cache_state
 
 logger = logging.getLogger(__name__)
 
@@ -337,17 +330,10 @@ def _spec_payload(spec: FilterSpec) -> dict:
 def screener_run(spec: FilterSpec) -> dict:
     started = time.perf_counter()
     try:
-        snap = market_snapshot_cached()
-        listing = fetch_listing_dates()
-        earnings = fetch_earnings_growth(_latest_report_period(date.today()))
+        merged, fundamentals_ready = load_merged_market()
     except Exception as exc:
         logger.warning("screener snapshot fetch failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"行情快照拉取失败: {exc}")
-
-    field_catalog.set_industry_options(
-        sorted({str(v) for v in snap["industry"].dropna()}) if "industry" in snap.columns else []
-    )
-    merged = merge_snapshot(snap, listing, earnings)
 
     conn = get_conn()
     try:
@@ -367,6 +353,31 @@ def screener_run(spec: FilterSpec) -> dict:
         "total_matched": result["total_matched"],
         "elapsed_sec": round(time.perf_counter() - started, 2),
         "cached": snapshot_cache_state(),
+        "fundamentals_ready": fundamentals_ready,
+    }
+
+
+@app.get("/api/screener/score")
+def screener_score_endpoint(top: int = Query(50, ge=1, le=500)) -> dict:
+    """全市场多因子综合打分（0-100 分 + 排名 + 各因子百分位），不含买卖建议。"""
+    started = time.perf_counter()
+    try:
+        merged, fundamentals_ready = load_merged_market()
+    except Exception as exc:
+        logger.warning("screener score fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"行情快照拉取失败: {exc}")
+
+    universe = merged
+    if "name" in universe.columns:
+        universe = universe[~universe["name"].astype(str).str.contains("ST", na=False)]
+    rows = screener_score.score_universe(universe, top=top)
+    return {
+        "rows": _records(rows),
+        "columns": list(rows.columns),
+        "factors": [spec.field for spec in screener_score.resolve_factors(list(universe.columns))],
+        "universe_size": len(universe),
+        "elapsed_sec": round(time.perf_counter() - started, 2),
+        "fundamentals_ready": fundamentals_ready,
     }
 
 

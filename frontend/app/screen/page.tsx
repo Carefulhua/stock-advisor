@@ -38,6 +38,10 @@ const COLUMN_LABELS: Record<string, string> = {
   net_profit: "净利润",
   roe: "ROE",
   gross_margin: "毛利率",
+  debt_ratio: "资产负债率",
+  net_margin: "净利率",
+  revenue_qoq: "营收环比",
+  net_profit_qoq: "净利润环比",
   industry: "行业",
   list_date: "上市日期",
 };
@@ -56,6 +60,10 @@ const SORTABLE = [
   "zdf_d20",
   "zljr",
   "eps",
+  "debt_ratio",
+  "net_margin",
+  "revenue_qoq",
+  "net_profit_qoq",
 ];
 
 export default function ScreenPage() {
