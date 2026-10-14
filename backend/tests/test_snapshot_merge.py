@@ -1,3 +1,4 @@
+import akshare as ak
 import pandas as pd
 import pytest
 
@@ -51,8 +52,10 @@ def raw_earnings() -> pd.DataFrame:
             "每股收益": [1.2, 0.8],
             "每股经营现金流量": [1.5, None],
             "营业总收入-同比增长": [10.5, -3.2],
+            "营业总收入-季度环比增长": [2.5, -1.1],
             "净利润-净利润": [50000000000.0, 30000000000.0],
             "净利润-同比增长": [12.5, -4.0],
+            "净利润-季度环比增长": [3.5, -0.8],
             "净资产收益率": [9.8, 7.1],
             "销售毛利率": [45.0, None],
             "所处行业": ["银行", "银行"],
@@ -68,11 +71,64 @@ def test_fetch_earnings_growth_returns_all_fields(monkeypatch):
     assert got.loc[0, "cfps"] == pytest.approx(1.5)
     assert pd.isna(got.loc[1, "cfps"])
     assert got.loc[0, "revenue_yoy"] == pytest.approx(10.5)
+    assert got.loc[0, "revenue_qoq"] == pytest.approx(2.5)
+    assert got.loc[1, "revenue_qoq"] == pytest.approx(-1.1)
     assert got.loc[0, "net_profit"] == pytest.approx(5e10)
     assert got.loc[0, "net_profit_yoy"] == pytest.approx(12.5)
+    assert got.loc[0, "net_profit_qoq"] == pytest.approx(3.5)
+    assert got.loc[1, "net_profit_qoq"] == pytest.approx(-0.8)
     assert got.loc[0, "roe"] == pytest.approx(9.8)
     assert got.loc[0, "gross_margin"] == pytest.approx(45.0)
     assert got.loc[0, "industry"] == "银行"
+
+
+def raw_balance() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "股票代码": ["600000", "000001", "300750"],
+            "资产负债率": [91.8, 91.9, 60.2],
+        }
+    )
+
+
+def raw_income() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "股票代码": ["600000", "000001", "300750"],
+            "净利润": [5.0e10, 4.4e10, 3.0e10],
+            "营业总收入": [1.0e11, 1.0e11, 1.0e11],
+        }
+    )
+
+
+def test_fetch_fundamentals_derives_debt_ratio_and_net_margin(monkeypatch):
+    def fake_retry(fn, **kwargs):
+        return raw_balance() if fn is ak.stock_zcfz_em else raw_income()
+
+    monkeypatch.setattr(snapshot, "_with_retry", fake_retry)
+
+    got = snapshot.fetch_fundamentals("20260630").set_index("code")
+
+    assert set(got.index) == {"600000", "000001", "300750"}
+    assert got.loc["600000", "debt_ratio"] == pytest.approx(91.8)
+    assert got.loc["300750", "debt_ratio"] == pytest.approx(60.2)
+    assert got.loc["600000", "net_margin"] == pytest.approx(50.0)
+    assert got.loc["300750", "net_margin"] == pytest.approx(30.0)
+
+
+def test_fetch_fundamentals_blank_net_margin_when_revenue_missing(monkeypatch):
+    income = raw_income()
+    income.loc[2, "营业总收入"] = 0.0
+    monkeypatch.setattr(
+        snapshot,
+        "_with_retry",
+        lambda fn, **kw: raw_balance() if fn is ak.stock_zcfz_em else income,
+    )
+
+    got = snapshot.fetch_fundamentals("20260630").set_index("code")
+
+    assert pd.isna(got.loc["300750", "net_margin"])
+    assert got.loc["300750", "debt_ratio"] == pytest.approx(60.2)
 
 
 def test_merge_snapshot_left_joins_and_fills_missing():
@@ -84,6 +140,19 @@ def test_merge_snapshot_left_joins_and_fills_missing():
     assert pd.isna(got.loc[2, "net_profit_yoy"])
     assert pd.isna(got.loc[2, "list_date"])
     assert got.loc[0, "net_profit_yoy"] == pytest.approx(12.5)
+
+
+def test_merge_snapshot_adds_fundamentals_when_provided():
+    snap = pd.DataFrame({"code": ["600000", "000001"], "name": ["A", "B"]})
+    listing = pd.DataFrame({"code": ["600000"], "list_date": pd.to_datetime(["2000-01-01"])})
+    earnings = pd.DataFrame({"code": ["600000"], "roe": [9.8]})
+    fundamentals = pd.DataFrame({"code": ["600000"], "debt_ratio": [91.8], "net_margin": [50.0]})
+
+    got = snapshot.merge_snapshot(snap, listing, earnings, fundamentals)
+
+    assert got.loc[0, "debt_ratio"] == pytest.approx(91.8)
+    assert got.loc[0, "net_margin"] == pytest.approx(50.0)
+    assert pd.isna(got.loc[1, "debt_ratio"])
 
 
 def test_snapshot_cache_serves_same_day(monkeypatch):

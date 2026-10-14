@@ -1,7 +1,7 @@
-"""三路数据拉取与合并：市场快照 / 上市日期 / 业绩报表。
+"""多路数据拉取与合并：市场快照 / 上市日期 / 业绩报表 / 财务比率。
 
-筛选所需的全维度指标全部来自「腾讯全市场快照 + 业绩报表」两个全市场接口，不下载日线。
-腾讯快照约需 3.5 分钟（27 次分页），因此按自然日做进程内缓存，同一天只拉一次。
+筛选所需的全维度指标全部来自全市场接口，不下载日线。腾讯快照约需 3.5 分钟（27 次分页），
+因此按自然日做进程内缓存，同一天只拉一次；其余接口单轮 2-3 秒，走原有实时路径。
 """
 from __future__ import annotations
 
@@ -59,8 +59,10 @@ EARNINGS_COLUMN_MAP = {
     "每股收益": "eps",
     "每股经营现金流量": "cfps",
     "营业总收入-同比增长": "revenue_yoy",
+    "营业总收入-季度环比增长": "revenue_qoq",
     "净利润-净利润": "net_profit",
     "净利润-同比增长": "net_profit_yoy",
+    "净利润-季度环比增长": "net_profit_qoq",
     "净资产收益率": "roe",
     "销售毛利率": "gross_margin",
     "所处行业": "industry",
@@ -80,13 +82,44 @@ def fetch_earnings_growth(report_period: str) -> pd.DataFrame:
     return df.drop_duplicates(subset=["code"]).reset_index(drop=True)
 
 
+BALANCE_COLUMN_MAP = {"资产负债率": "debt_ratio"}
+INCOME_COLUMN_MAP = {"净利润": "income_net_profit", "营业总收入": "income_revenue"}
+
+
+def _full_market_statement(raw: pd.DataFrame, column_map: dict[str, str]) -> pd.DataFrame:
+    """三大报表共用形态：股票代码 + 若干中文指标列，代码归一成 6 位并按 code 去重。"""
+    df = raw[["股票代码", *column_map]].rename(columns=column_map).copy()
+    df["code"] = df.pop("股票代码").astype(str).str.zfill(6)
+    for column in column_map.values():
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df.drop_duplicates(subset=["code"]).reset_index(drop=True)
+
+
+def fetch_fundamentals(report_period: str) -> pd.DataFrame:
+    """全市场资产负债表 + 利润表 → code, debt_ratio, net_margin。
+
+    业绩报表(stock_yjbb_em)不含资产负债率与净利率，需另取两个全市场报表接口
+    （各 11 次分页、约 2 秒）。净利率由利润表自算：净利润 / 营业总收入。
+    """
+    balance = _full_market_statement(_with_retry(ak.stock_zcfz_em, date=report_period), BALANCE_COLUMN_MAP)
+    income = _full_market_statement(_with_retry(ak.stock_lrb_em, date=report_period), INCOME_COLUMN_MAP)
+    merged = balance.merge(income, on="code", how="outer")
+    revenue = merged["income_revenue"].where(merged["income_revenue"] > 0)
+    merged["net_margin"] = (merged["income_net_profit"] / revenue * 100).replace([float("inf"), float("-inf")], pd.NA)
+    return merged
+
+
 def merge_snapshot(
     snapshot: pd.DataFrame,
     listing: pd.DataFrame,
     earnings: pd.DataFrame,
+    fundamentals: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """以快照为左表按 code 合并上市日期与业绩报表（纯函数，不做任何单位换算）。"""
-    return snapshot.merge(listing, on="code", how="left").merge(earnings, on="code", how="left")
+    """以快照为左表按 code 合并上市日期、业绩报表与财务比率（纯函数，不做任何单位换算）。"""
+    merged = snapshot.merge(listing, on="code", how="left").merge(earnings, on="code", how="left")
+    if fundamentals is not None:
+        merged = merged.merge(fundamentals, on="code", how="left")
+    return merged
 
 
 _SNAPSHOT_CACHE: tuple[str, pd.DataFrame] | None = None

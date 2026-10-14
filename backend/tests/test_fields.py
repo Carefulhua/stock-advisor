@@ -62,5 +62,14 @@ def test_spec_table_has_expected_fields():
         "zdf_y", "zdf_d20", "zdf_d60", "zljlr",
         "eps", "cfps", "revenue_yoy", "net_profit_yoy", "net_profit",
         "roe", "gross_margin", "industry", "list_date",
+        "debt_ratio", "net_margin", "revenue_qoq", "net_profit_qoq",
     }
     assert {item["field"] for item in fields.catalog()} == expected
+
+
+def test_new_fundamental_dimensions_are_numeric_percent_fields():
+    for name in ("debt_ratio", "net_margin", "revenue_qoq", "net_profit_qoq"):
+        spec = fields.by_name(name)
+        assert spec.kind == "number", name
+        assert spec.unit == "%", name
+        assert tuple(spec.ops) == NUMERIC_OPS, name

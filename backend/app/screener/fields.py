@@ -60,6 +60,10 @@ FIELDS: list[FieldSpec] = [
     FieldSpec("net_profit", "净利润", "元", "number", NUMERIC_OPS),
     FieldSpec("roe", "净资产收益率", "%", "number", NUMERIC_OPS),
     FieldSpec("gross_margin", "销售毛利率", "%", "number", NUMERIC_OPS),
+    FieldSpec("debt_ratio", "资产负债率", "%", "number", NUMERIC_OPS),
+    FieldSpec("net_margin", "销售净利率", "%", "number", NUMERIC_OPS),
+    FieldSpec("revenue_qoq", "营收环比", "%", "number", NUMERIC_OPS),
+    FieldSpec("net_profit_qoq", "净利润环比", "%", "number", NUMERIC_OPS),
     FieldSpec("industry", "所处行业", "分类", "enum", ENUM_OPS),
     FieldSpec("list_date", "上市日期", "年-月-日", "date", DATE_OPS),
 ]
