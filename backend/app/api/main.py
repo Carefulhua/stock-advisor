@@ -36,6 +36,7 @@ from app.screener.run import _latest_report_period, run_filter
 from app.screener.snapshot import (
     fetch_earnings_growth,
     fetch_listing_dates,
+    market_code_index,
     market_snapshot_cached,
     merge_snapshot,
     snapshot_cache_state,
@@ -189,7 +190,7 @@ class ApplyRequest(BaseModel):
 
 
 def _names_for(conn, codes: list[str]) -> list[tuple[str, str]]:
-    """从 stocks 表解析 code → (code, name)，未收录的代码直接丢弃。"""
+    """解析 code → (code, name)。stocks 表优先，未收录的回落到全市场代码表。"""
     rows = conn.execute(
         "SELECT code, name FROM stocks WHERE code IN ({})".format(
             ",".join("?" * len(codes))
@@ -197,7 +198,25 @@ def _names_for(conn, codes: list[str]) -> list[tuple[str, str]]:
         codes,
     ).fetchall()
     found = {row[0]: row[1] for row in rows}
+    missing = [code for code in codes if code not in found]
+    if missing:
+        index = market_code_index()
+        known = {row.code: row.name for row in index.itertuples()}
+        found.update({code: known[code] for code in missing if code in known})
     return [(code, found[code]) for code in codes if code in found]
+
+
+@app.get("/api/stocks/search")
+def stocks_search(q: str = Query(min_length=1, max_length=20)) -> list[dict]:
+    """全市场代码/名称搜索（复用当日快照缓存），供自选添加使用。"""
+    try:
+        index = market_code_index()
+    except Exception as exc:
+        logger.warning("stock search index failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"全市场代码表拉取失败: {exc}")
+    keyword = q.strip()
+    hit = index[index["code"].str.contains(keyword, regex=False) | index["name"].str.contains(keyword, regex=False)]
+    return _records(hit.head(20))
 
 
 @app.get("/api/screener/fields")

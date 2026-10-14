@@ -11,6 +11,7 @@ import akshare as ak
 import pandas as pd
 
 from app.data.fetchers import _with_retry
+from app.data.fetchers_baostock import is_supported
 
 SNAPSHOT_NUMERIC_COLUMNS = [
     "zxj", "zd", "zdf", "zf", "lb", "hsl", "pe_ttm", "pn",
@@ -108,6 +109,18 @@ def market_snapshot_cached() -> pd.DataFrame:
 
 def snapshot_cache_state() -> bool:
     return _SNAPSHOT_CACHE is not None and _SNAPSHOT_CACHE[0] == _cache_key()
+
+
+def market_code_index() -> pd.DataFrame:
+    """全市场 code→name 索引，供自选搜索与名称解析复用当日快照缓存。
+
+    只保留 baostock 支持的 0/3/6 开头代码：搜出来却同步不了的票（如北交所）没有意义。
+    """
+    snap = market_snapshot_cached()
+    df = snap[["code", "name"]].dropna()
+    df["name"] = df["name"].astype(str).str.strip()
+    keep = df["code"].map(is_supported) & df["name"].ne("")
+    return df[keep].drop_duplicates(subset=["code"]).reset_index(drop=True)
 
 
 def clear_snapshot_cache() -> None:

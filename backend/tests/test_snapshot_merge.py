@@ -119,6 +119,39 @@ def test_snapshot_cache_refetched_next_day(monkeypatch):
     assert got.loc[0, "turnover"] == pytest.approx(2.0)
 
 
+def test_market_code_index_excludes_unsupported_prefixes(monkeypatch):
+    """北交所等代码 baostock 不支持，搜出来也同步不了，不该出现在可选列表里。"""
+    snap = pd.DataFrame(
+        [
+            {"code": "600036", "name": "招商银行"},
+            {"code": "830799", "name": "艾融软件"},
+            {"code": "872925", "name": "北交所股"},
+            {"code": "400001", "name": "老三板"},
+        ]
+    )
+    monkeypatch.setattr(snapshot, "market_snapshot_cached", lambda: snap)
+
+    index = snapshot.market_code_index()
+
+    assert list(index["code"]) == ["600036"]
+
+
+def test_market_code_index_drops_rows_without_name(monkeypatch):
+    snap = pd.DataFrame([{"code": "600036", "name": "招商银行"}, {"code": "600037", "name": None}])
+    monkeypatch.setattr(snapshot, "market_snapshot_cached", lambda: snap)
+
+    index = snapshot.market_code_index()
+
+    assert list(index["code"]) == ["600036"]
+
+
+def test_market_code_index_columns_are_code_and_name(monkeypatch):
+    snap = pd.DataFrame([{"code": "600036", "name": "招商银行", "pe_ttm": 5.0}])
+    monkeypatch.setattr(snapshot, "market_snapshot_cached", lambda: snap)
+
+    assert list(snapshot.market_code_index().columns) == ["code", "name"]
+
+
 def test_snapshot_cache_state_false_when_empty():
     snapshot._SNAPSHOT_CACHE = None
     assert snapshot.snapshot_cache_state() is False

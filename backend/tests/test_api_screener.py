@@ -351,6 +351,61 @@ def test_watchlist_does_not_duplicate_codes_in_both_tables(client, seed_stocks):
     assert rows[0]["is_favorite"] is True
 
 
+@pytest.fixture
+def fake_index(monkeypatch):
+    """全市场代码表（含从未同步过的票），供搜索与名称解析。"""
+    index = pd.DataFrame(
+        [
+            {"code": "600036", "name": "招商银行"},
+            {"code": "600519", "name": "贵州茅台"},
+            {"code": "000001", "name": "平安银行"},
+        ]
+    )
+    monkeypatch.setattr(main_mod, "market_code_index", lambda: index)
+    return index
+
+
+def test_stock_search_matches_by_code_and_name(client, fake_index):
+    by_code = client.get("/api/stocks/search", params={"q": "60003"})
+    assert by_code.status_code == 200
+    assert [r["code"] for r in by_code.json()] == ["600036"]
+
+    by_name = client.get("/api/stocks/search", params={"q": "茅台"})
+    assert [r["code"] for r in by_name.json()] == ["600519"]
+
+
+def test_stock_search_requires_query(client, fake_index):
+    assert client.get("/api/stocks/search", params={"q": ""}).status_code == 422
+
+
+def test_stock_search_returns_502_when_snapshot_unavailable(client, monkeypatch):
+    def _boom():
+        raise RuntimeError("行情快照拉取失败")
+
+    monkeypatch.setattr(main_mod, "market_code_index", _boom)
+
+    resp = client.get("/api/stocks/search", params={"q": "600"})
+
+    assert resp.status_code == 502
+
+
+def test_stock_search_limits_results(client, monkeypatch):
+    index = pd.DataFrame([{"code": f"60000{i}", "name": f"股票{i}"} for i in range(30)])
+    monkeypatch.setattr(main_mod, "market_code_index", lambda: index)
+
+    resp = client.get("/api/stocks/search", params={"q": "股票"})
+
+    assert len(resp.json()) == 20
+
+
+def test_favorites_add_resolves_name_for_never_synced_code(client, fake_index):
+    """代码不在 stocks 表（从未同步过）时，名称应从全市场代码表解析，否则加自选会被静默丢弃。"""
+    resp = client.post("/api/favorites", json={"codes": ["600036"]})
+
+    assert resp.json()["added"] == 1
+    assert client.get("/api/favorites").json()[0]["name"] == "招商银行"
+
+
 def test_sync_status_endpoint_reports_job_state(client, monkeypatch):
     monkeypatch.setattr(main_mod.sync_job, "get_status", lambda: {"running": False, "total": 0, "done": 0})
 
