@@ -3,33 +3,34 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import ChatPanel from "./ChatPanel";
-import { buildChartOption, IndicatorTab, Row } from "./chartOption";
+import { buildChartOption, IndicatorTab, MaKey, MaVisible, Row } from "./chartOption";
 import { API } from "./api";
 
 type Stock = { code: string; name: string; in_watchlist: boolean };
 type WatchItem = { code: string; name: string; is_favorite: boolean };
 
-const RANGES = [
-  { key: "3m", label: "近3月", days: 92 },
-  { key: "1y", label: "近1年", days: 366 },
-  { key: "3y", label: "近3年", days: 1096 },
-  { key: "all", label: "全部", days: 0 },
+const PERIODS = [
+  { key: "day", label: "日K" },
+  { key: "week", label: "周K" },
+  { key: "month", label: "月K" },
+  { key: "quarter", label: "季K" },
+  { key: "year", label: "年K" },
 ] as const;
-type RangeKey = (typeof RANGES)[number]["key"];
+type PeriodKey = (typeof PERIODS)[number]["key"];
 
 const TABS: { key: IndicatorTab; label: string }[] = [
   { key: "macd", label: "MACD" },
-  { key: "rsi", label: "RSI(14)" },
-  { key: "kdj", label: "KDJ(9,3,3)" },
+  { key: "kdj", label: "KDJ" },
+  { key: "rsi", label: "RSI" },
 ];
 
-function startFor(range: RangeKey): string | undefined {
-  const days = RANGES.find((r) => r.key === range)!.days;
-  if (!days) return undefined;
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+const ALL_MA: MaVisible = { ma5: true, ma10: true, ma20: true, ma60: true };
+const MA_BY_LABEL: Record<string, MaKey> = { MA5: "ma5", MA10: "ma10", MA20: "ma20", MA60: "ma60" };
+
+type LegendSelectEvent = { name: string; selected: Record<string, boolean> };
+
+function isLegendSelectEvent(value: unknown): value is LegendSelectEvent {
+  return typeof value === "object" && value !== null && "name" in value && "selected" in value;
 }
 
 export default function Home() {
@@ -42,7 +43,8 @@ export default function Home() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<IndicatorTab>("macd");
-  const [range, setRange] = useState<RangeKey>("1y");
+  const [period, setPeriod] = useState<PeriodKey>("day");
+  const [ma, setMa] = useState<MaVisible>(ALL_MA);
   const [chatOpen, setChatOpen] = useState(false);
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInst = useRef<echarts.ECharts | null>(null);
@@ -63,13 +65,11 @@ export default function Home() {
       .catch(() => setError("无法连接后端 API"));
   }, []);
 
-  const load = useCallback((c: string, r: RangeKey) => {
+  const load = useCallback((c: string, p: PeriodKey) => {
     if (!c) return;
     setRows(null);
     setError("");
-    const start = startFor(r);
-    const url = `${API}/api/indicators/${c}${start ? `?start=${start}` : ""}`;
-    fetch(url)
+    fetch(`${API}/api/indicators/${c}?period=${p}`)
       .then((res) => {
         if (res.status === 404) throw new Error("EMPTY");
         if (!res.ok) throw new Error("BACKEND");
@@ -88,18 +88,29 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    load(code, range);
-  }, [code, range, load]);
+    load(code, period);
+  }, [code, period, load]);
 
   useEffect(() => {
     if (!chartRef.current || !rows || rows.length === 0) return;
     const inst = chartInst.current ?? echarts.init(chartRef.current, undefined, { renderer: "canvas" });
     chartInst.current = inst;
-    inst.setOption(buildChartOption(rows, tab), true);
+    inst.setOption(buildChartOption(rows, tab, ma), true);
     const obs = new ResizeObserver(() => inst.resize());
     obs.observe(chartRef.current);
-    return () => obs.disconnect();
-  }, [rows, tab]);
+    const onLegend = (...args: unknown[]) => {
+      const payload = args[0];
+      if (!isLegendSelectEvent(payload)) return;
+      const key = MA_BY_LABEL[payload.name];
+      if (!key) return;
+      setMa((prev) => ({ ...prev, [key]: payload.selected[payload.name] }));
+    };
+    inst.on("legendselectchanged", onLegend);
+    return () => {
+      obs.disconnect();
+      inst.off("legendselectchanged", onLegend);
+    };
+  }, [rows, tab, ma]);
 
   useEffect(() => () => chartInst.current?.dispose(), []);
 
@@ -173,35 +184,34 @@ export default function Home() {
         )}
       </div>
 
-      <div className="toolbar">
-        <div className="group">
-          {RANGES.map((r) => (
-            <button key={r.key} className={range === r.key ? "active" : ""} onClick={() => setRange(r.key)}>
-              {r.label}
-            </button>
-          ))}
-        </div>
-        <span className="sep" />
-        <div className="group">
-          {TABS.map((t) => (
-            <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        {code && (
-          <button className="ai-toggle" onClick={() => setChatOpen((v) => !v)}>
-            {chatOpen ? "收起解读" : "AI解读"}
-          </button>
-        )}
-      </div>
-
       <div className="body">
         <div className="main-col">
+          <div className="chart-head">
+            <div className="tabs">
+              {PERIODS.map((p) => (
+                <button key={p.key} className={period === p.key ? "active" : ""} onClick={() => setPeriod(p.key)}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {code && (
+              <button className="ai-toggle" onClick={() => setChatOpen((v) => !v)}>
+                {chatOpen ? "收起解读" : "AI解读"}
+              </button>
+            )}
+          </div>
           {error && <div className="center-msg">{error}</div>}
           {!error && !rows && <div className="center-msg">加载中…</div>}
           {!error && rows && rows.length === 0 && <div className="center-msg">该股票无数据</div>}
           <div ref={chartRef} className="chart" style={{ display: rows && rows.length > 0 ? "block" : "none" }} />
+          <div className="ind-bar">
+            {TABS.map((t) => (
+              <button key={t.key} className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+                {t.label}
+              </button>
+            ))}
+            <span className="hint">周期涨跌幅基于所选 K 线</span>
+          </div>
         </div>
         {code && chatOpen && <ChatPanel code={code} onClose={() => setChatOpen(false)} />}
       </div>

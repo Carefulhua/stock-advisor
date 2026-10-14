@@ -21,6 +21,10 @@ export type Row = {
 
 export type IndicatorTab = "macd" | "rsi" | "kdj";
 
+export const MA_KEYS = ["ma5", "ma10", "ma20", "ma60"] as const;
+export type MaKey = (typeof MA_KEYS)[number];
+export type MaVisible = Record<MaKey, boolean>;
+
 const UP = "#f5333f";
 const DOWN = "#14b866";
 const MA_COLORS: Record<string, string> = {
@@ -35,7 +39,7 @@ const axisLine = { lineStyle: { color: "#262d3d" } };
 const splitLine = { lineStyle: { color: "#1c2230" } };
 const axisLabel = { color: textColor, fontSize: 11 };
 
-function maSeries(key: "ma5" | "ma10" | "ma20" | "ma60", rows: Row[]) {
+function maSeries(key: MaKey, rows: Row[]) {
   return {
     name: key.toUpperCase(),
     type: "line" as const,
@@ -161,7 +165,7 @@ function fmtTooltip(v: unknown): unknown {
   return v;
 }
 
-export function buildChartOption(rows: Row[], tab: IndicatorTab) {
+export function buildChartOption(rows: Row[], tab: IndicatorTab, maOn: MaVisible) {
   const dates = rows.map((r) => r.date.slice(0, 10));
   const candle = rows.map((r) => [r.open, r.close, r.low, r.high]);
   const visible = Math.min(rows.length, 180);
@@ -176,30 +180,42 @@ export function buildChartOption(rows: Row[], tab: IndicatorTab) {
       data: candle,
       itemStyle: { color: UP, color0: DOWN, borderColor: UP, borderColor0: DOWN },
     },
-    maSeries("ma5", rows),
-    maSeries("ma10", rows),
-    maSeries("ma20", rows),
-    maSeries("ma60", rows),
+    ...MA_KEYS.map((k) => maSeries(k, rows)),
   ];
   const indSeries = indicatorSeries(rows, tab);
-  const legendData = [
-    ...mainSeries.slice(1).map((s) => s.name),
-    ...indSeries.map((s) => s.name),
-  ];
+
+  const maSelected: Record<string, boolean> = {};
+  for (const k of MA_KEYS) maSelected[k.toUpperCase()] = maOn[k];
 
   return {
     animation: false,
     backgroundColor: "transparent",
     axisPointer: { link: [{ xAxisIndex: "all" }] },
-    legend: {
-      data: legendData,
-      top: 4,
-      left: 10,
-      textStyle: { color: textColor, fontSize: 11 },
-      icon: "rect",
-      itemWidth: 10,
-      itemHeight: 3,
-    },
+    legend: [
+      {
+        data: MA_KEYS.map((k) => k.toUpperCase()),
+        selected: maSelected,
+        top: 6,
+        right: 84,
+        icon: "roundRect",
+        itemWidth: 12,
+        itemHeight: 3,
+        itemGap: 12,
+        textStyle: { color: textColor, fontSize: 11 },
+        inactiveColor: "#454d5e",
+      },
+      {
+        data: indSeries.map((s) => s.name),
+        top: "75%",
+        left: 62,
+        selectedMode: false,
+        icon: "roundRect",
+        itemWidth: 12,
+        itemHeight: 3,
+        itemGap: 12,
+        textStyle: { color: textColor, fontSize: 11 },
+      },
+    ],
     tooltip: { trigger: "axis" as const, axisPointer: { type: "cross" as const }, valueFormatter: fmtTooltip },
     grid: [
       { left: 60, right: 76, top: 30, height: "48%" },

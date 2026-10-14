@@ -131,46 +131,57 @@ body {
   color: var(--down);
 }
 
-.toolbar {
+.chart-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+  gap: 16px;
+  padding: 5px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
 
-.toolbar .group {
+.chart-head .tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
 }
 
-.toolbar button {
-  padding: 5px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+.chart-head .tabs button {
+  padding: 4px 10px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
   color: var(--muted);
   cursor: pointer;
   font-size: 13px;
 }
 
-.toolbar button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+.chart-head .tabs button:hover {
+  color: var(--text);
 }
 
-.toolbar .sep {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-  margin: 0 6px;
+.chart-head .tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.ai-toggle {
+  margin-left: auto;
+  padding: 4px 12px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.ai-toggle:hover {
+  background: #1f2636;
 }
 
 .body {
   display: flex;
-  height: calc(100vh - 96px);
+  height: calc(100vh - 49px);
 }
 
 .main-col {
@@ -186,23 +197,47 @@ body {
   min-height: 0;
 }
 
+.ind-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.ind-bar button {
+  padding: 3px 10px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.ind-bar button:hover {
+  color: var(--text);
+}
+
+.ind-bar button.active {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+.ind-bar .hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .center-msg {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 1;
   color: var(--muted);
-}
-
-.toolbar .ai-toggle {
-  margin-left: auto;
-  padding: 5px 12px;
-  background: var(--panel);
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 13px;
 }
 
 .chat-panel {
