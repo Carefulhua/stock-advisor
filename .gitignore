@@ -7,5 +7,7 @@ node_modules/
 .next/
 .superpowers/
 *.sqlite
+.env
+backend/.env
 .e2e-*.png
 tsconfig.tsbuildinfo
