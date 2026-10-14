@@ -413,3 +413,52 @@ def test_sync_status_endpoint_reports_job_state(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["running"] is False
+
+def test_startup_sync_starts_display_pool_only_daily(client, monkeypatch):
+    """启动同步范围=自选∪池子、只补日线，且过滤 baostock 不支持的市场。"""
+    started: dict = {}
+
+    def _fake_start(codes, skip_financials=False):
+        started["codes"] = list(codes)
+        started["skip_financials"] = skip_financials
+        return "job-startup"
+
+    monkeypatch.setattr(main_mod.sync_job, "start", _fake_start)
+    conn = main_mod.get_conn()
+    conn.execute(
+        "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES('600519','贵州茅台',0.0,1,'2026-10-13')"
+    )
+    conn.execute(
+        "INSERT INTO watchlist(code, name, score, rank, selected_at) VALUES('830799','北交所股',0.0,2,'2026-10-13')"
+    )
+    conn.execute("INSERT INTO favorites(code, name, added_at) VALUES('000001','平安银行','2026-10-13')")
+    conn.commit()
+    conn.close()
+
+    job_id = main_mod.startup_daily_sync()
+
+    assert job_id == "job-startup"
+    assert started["codes"] == ["000001", "600519"]
+    assert started["skip_financials"] is True
+
+
+def test_startup_sync_skips_when_display_pool_empty(client, monkeypatch):
+    monkeypatch.setattr(
+        main_mod.sync_job, "start", lambda *args, **kwargs: pytest.fail("空展示池不应启动同步")
+    )
+
+    assert main_mod.startup_daily_sync() is None
+
+
+def test_startup_sync_skips_when_job_busy(client, monkeypatch):
+    conn = main_mod.get_conn()
+    conn.execute("INSERT INTO favorites(code, name, added_at) VALUES('000001','平安银行','2026-10-13')")
+    conn.commit()
+    conn.close()
+
+    def _busy(codes, skip_financials=False):
+        raise main_mod.sync_job.SyncBusyError("已有同步任务在运行")
+
+    monkeypatch.setattr(main_mod.sync_job, "start", _busy)
+
+    assert main_mod.startup_daily_sync() is None

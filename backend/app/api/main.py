@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal
 
@@ -18,6 +19,7 @@ from app.assistant.context import build_context
 from app.assistant.llm import LLMError, stream_chat
 from app.core import config
 from app.core.config import CHAT_HISTORY_LIMIT, GLM_API_KEY
+from app.data import fetchers_baostock
 from app.data.storage import (
     add_favorites,
     get_conn,
@@ -44,7 +46,40 @@ from app.screener.snapshot import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="stock-advisor api")
+
+def startup_daily_sync() -> str | None:
+    """服务启动即更新展示池（自选∪池子）的日线增量。
+
+    走后台线程（复用 sync_job 进度与互斥），不阻塞服务启动；
+    只补日线不拉财务——财务每只都要发一次 HTTP，留给手动/调度任务。
+    """
+    conn = get_conn()
+    try:
+        pool = read_watchlist(conn)
+        favorites = read_favorites(conn)
+    finally:
+        conn.close()
+    codes = sorted(set(pool["code"]) | set(favorites["code"]))
+    # baostock 不覆盖北交所等，先过滤避免整轮记为失败
+    codes = [code for code in codes if fetchers_baostock.is_supported(code)]
+    if not codes:
+        return None
+    try:
+        job_id = sync_job.start(codes, skip_financials=True)
+    except sync_job.SyncBusyError:
+        logger.info("startup sync skipped: 已有同步任务在运行")
+        return None
+    logger.info("startup sync started: %s 只, job=%s", len(codes), job_id)
+    return job_id
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    startup_daily_sync()
+    yield
+
+
+app = FastAPI(title="stock-advisor api", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
