@@ -19,8 +19,20 @@ export default function ChatPanel({ code, onClose }: ChatPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let alive = true;
     setMsgs([]);
     setError("");
+    fetch(`${API}/api/chat/${code}/history`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`加载历史失败(${res.status})`))))
+      .then((data: ChatMsg[]) => {
+        if (alive) setMsgs(data.map((m) => ({ role: m.role, content: m.content })));
+      })
+      .catch((err) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      alive = false;
+    };
   }, [code]);
 
   useEffect(() => {

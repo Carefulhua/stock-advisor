@@ -115,3 +115,49 @@ def test_mark_sync_state(tmp_env):
     assert row["quotes_synced_at"].notna().all()
     assert row["financials_synced_at"].notna().all()
     conn.close()
+
+
+def test_chat_history_roundtrip(tmp_env):
+    conn = storage.get_conn()
+    n = storage.append_chat_messages(
+        conn,
+        "300456",
+        [
+            {"role": "user", "content": "这只怎么样"},
+            {"role": "assistant", "content": "偏强震荡"},
+            {"role": "user", "content": ""},  # 空内容忽略
+            {"role": "system", "content": "x"},  # 非法角色忽略
+        ],
+    )
+    assert n == 2
+    msgs = storage.read_chat_messages(conn, "300456")
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "这只怎么样"
+    assert msgs[0]["created_at"]
+    # 其他股票互不干扰
+    assert storage.read_chat_messages(conn, "000001") == []
+    conn.close()
+
+
+def test_chat_history_trims_oldest(tmp_env):
+    conn = storage.get_conn()
+    for i in range(storage.CHAT_STORE_LIMIT + 10):
+        storage.append_chat_messages(
+            conn, "000001", [{"role": "user", "content": f"q{i}"}]
+        )
+    msgs = storage.read_chat_messages(conn, "000001", limit=1000)
+    assert len(msgs) == storage.CHAT_STORE_LIMIT
+    assert msgs[0]["content"] == "q10"  # 最旧10条被裁剪
+    conn.close()
+
+
+def test_chat_read_limit(tmp_env):
+    conn = storage.get_conn()
+    storage.append_chat_messages(
+        conn,
+        "000002",
+        [{"role": "user", "content": f"m{i}"} for i in range(5)],
+    )
+    msgs = storage.read_chat_messages(conn, "000002", limit=3)
+    assert [m["content"] for m in msgs] == ["m2", "m3", "m4"]
+    conn.close()

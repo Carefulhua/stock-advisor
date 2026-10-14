@@ -40,7 +40,17 @@ CREATE TABLE IF NOT EXISTS favorites (
     name TEXT NOT NULL,
     added_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chat_history_code ON chat_history(code, id);
 """
+
+CHAT_STORE_LIMIT = 200  # 每只股票最多保留的对话条数（滚动裁剪最旧）
 
 
 def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
@@ -254,3 +264,41 @@ def read_watchlist(conn: sqlite3.Connection) -> pd.DataFrame:
         "SELECT code, name, score, rank, selected_at FROM watchlist ORDER BY rank",
         conn,
     )
+
+
+def append_chat_messages(conn: sqlite3.Connection, code: str, messages: list[dict]) -> int:
+    """追加对话记录, 超出 CHAT_STORE_LIMIT 裁剪最旧。返回写入条数。"""
+    normalized = _normalize_code(code)
+    if normalized is None or not messages:
+        return 0
+    rows = [
+        (normalized, str(m["role"]), str(m["content"]))
+        for m in messages
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+    if not rows:
+        return 0
+    with conn:
+        conn.executemany(
+            "INSERT INTO chat_history(code, role, content) VALUES(?, ?, ?)", rows
+        )
+        conn.execute(
+            "DELETE FROM chat_history WHERE code = ? AND id NOT IN ("
+            "SELECT id FROM chat_history WHERE code = ? ORDER BY id DESC LIMIT ?)",
+            (normalized, normalized, CHAT_STORE_LIMIT),
+        )
+    return len(rows)
+
+
+def read_chat_messages(conn: sqlite3.Connection, code: str, limit: int = 50) -> list[dict]:
+    """读取某只股票最近 limit 条对话, 升序返回。"""
+    normalized = _normalize_code(code)
+    if normalized is None:
+        return []
+    df = pd.read_sql_query(
+        "SELECT role, content, created_at FROM chat_history "
+        "WHERE code = ? ORDER BY id DESC LIMIT ?",
+        conn,
+        params=(normalized, limit),
+    )
+    return df.iloc[::-1].to_dict("records")

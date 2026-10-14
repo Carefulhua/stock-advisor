@@ -22,8 +22,10 @@ from app.core.config import CHAT_HISTORY_LIMIT, GLM_API_KEY
 from app.data import fetchers_baostock
 from app.data.storage import (
     add_favorites,
+    append_chat_messages,
     get_conn,
     list_stocks,
+    read_chat_messages,
     read_favorites,
     read_quotes,
     read_watchlist,
@@ -178,7 +180,17 @@ def chart_data(code: str, start: str | None = Query(None), end: str | None = Que
     out["k"] = k
     out["d"] = d
     out["j"] = j
-    return {"code": code, "rows": _records(out)}
+    return {"code": code, "period": period, "rows": _records(out)}
+
+
+@app.get("/api/chat/{code}/history")
+def chat_history(code: str, limit: int = Query(100, ge=1, le=200)) -> list[dict]:
+    """某只股票的解读对话历史（升序，最近 limit 条）。"""
+    conn = get_conn()
+    try:
+        return read_chat_messages(conn, code, limit=limit)
+    finally:
+        conn.close()
 
 
 @app.post("/api/chat")
@@ -196,6 +208,13 @@ def chat(req: ChatRequest) -> Response:
         for m in req.messages[-CHAT_HISTORY_LIMIT:]
     ]
     messages = [{"role": "system", "content": system}, *history]
+    # 只落库本轮新消息（客户端传全量历史，之前轮次已存过）
+    last_user = next(
+        (m for m in reversed(req.messages) if m.role == "user"), None
+    )
+    to_store = (
+        [{"role": "user", "content": last_user.content}] if last_user else []
+    )
 
     iterator = stream_chat(messages, api_key=GLM_API_KEY)
     try:
@@ -206,8 +225,22 @@ def chat(req: ChatRequest) -> Response:
         return Response(status_code=200, media_type="text/plain")
 
     def gen() -> Iterator[str]:
+        parts = [first]
         yield first
-        yield from iterator
+        try:
+            for chunk in iterator:
+                parts.append(chunk)
+                yield chunk
+        finally:
+            # 流完整产出后落库（含客户端提前断开，保存已生成部分）
+            reply = "".join(parts)
+            if reply:
+                to_store.append({"role": "assistant", "content": reply})
+            conn = get_conn()
+            try:
+                append_chat_messages(conn, req.code, to_store)
+            finally:
+                conn.close()
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
 
