@@ -18,6 +18,7 @@ DISPLAY_COLUMNS = [
     "pe_ttm", "pn", "turnover", "ltsz", "zsz", "hsl", "lb",
     "zdf_y", "zdf_d20", "zdf_d60", "zljlr",
     "eps", "cfps", "revenue_yoy", "net_profit_yoy", "net_profit", "roe", "gross_margin",
+    "debt_ratio", "net_margin", "revenue_qoq", "net_profit_qoq",
     "industry", "list_date",
 ]
 
@@ -33,6 +34,27 @@ def _latest_report_period(today: date) -> str:
     if md <= (10, 31):
         return f"{y}0630"
     return f"{y}0930"
+
+
+def load_merged_market(report_period: str | None = None) -> tuple[pd.DataFrame, bool]:
+    """拉取并合并筛选/打分所需的全部维度，返回 (合并表, 财务比率是否就绪)。
+
+    资产负债率/净利率来自另两个全市场报表接口，失败只降级为「这两列缺失」，
+    不阻断筛选与打分——其余维度照常可用，故用单独标志回报而不是整段报错。
+    """
+    snap = snapshot.market_snapshot_cached()
+    listing = snapshot.fetch_listing_dates()
+    period = report_period or _latest_report_period(date.today())
+    earnings = snapshot.fetch_earnings_growth(period)
+    fields.set_industry_options(
+        sorted({str(v) for v in snap["industry"].dropna()}) if "industry" in snap.columns else []
+    )
+    fundamentals = None
+    try:
+        fundamentals = snapshot.fetch_fundamentals(period)
+    except Exception as exc:
+        logger.warning("fundamentals fetch failed: %s", exc)
+    return snapshot.merge_snapshot(snap, listing, earnings, fundamentals), fundamentals is not None
 
 
 def _display_columns(merged: pd.DataFrame) -> list[str]:
@@ -115,12 +137,7 @@ def main() -> None:
     spec = conditions.FilterSpec.model_validate_json(args.conditions_json)
     spec = spec.model_copy(update={"sort_by": args.sort_by, "top": args.top})
 
-    snap = snapshot.market_snapshot_cached()
-    listing = snapshot.fetch_listing_dates()
-    period = args.report_period or _latest_report_period(date.today())
-    earnings = snapshot.fetch_earnings_growth(period)
-    merged = snapshot.merge_snapshot(snap, listing, earnings)
-    fields.set_industry_options(sorted(merged["industry"].dropna().unique()) if "industry" in merged else [])
+    merged, _ = load_merged_market(args.report_period)
 
     conn = get_conn()
     try:
