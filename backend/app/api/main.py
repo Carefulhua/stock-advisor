@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.analysis import bars
 from app.analysis import indicators as ind
 from app.assistant.context import build_context
 from app.assistant.llm import LLMError, stream_chat
@@ -166,11 +167,20 @@ def quotes(code: str, start: str | None = Query(None), end: str | None = Query(N
 
 
 @app.get("/api/indicators/{code}")
-def chart_data(code: str, start: str | None = Query(None), end: str | None = Query(None)) -> dict:
-    """返回 K线 OHLCV + 指标，一次请求喂饱前端图表。"""
+def chart_data(
+    code: str,
+    period: str = Query("day"),
+    start: str | None = Query(None),
+    end: str | None = Query(None),
+) -> dict:
+    """返回指定周期(默认日线)的 K线 OHLCV + 指标，一次请求喂饱前端图表。"""
+    if period not in bars.BAR_PERIODS:
+        raise HTTPException(status_code=400, detail=f"unsupported period: {period}")
     quotes = read_quotes(code, start=start, end=end)
     if quotes.empty:
         raise HTTPException(status_code=404, detail=f"no quotes for {code}")
+    # 指标必须在重采样之后算，否则周K 的均线/MACD 会用错周期
+    quotes = bars.resample_bars(quotes, period)
     close = quotes["close"]
     out = quotes[["date", "open", "high", "low", "close", "volume", "amount"]].copy()
     out["ma5"] = ind.moving_average(close, 5)
