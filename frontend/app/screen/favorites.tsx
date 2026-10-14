@@ -30,6 +30,7 @@ export default function FavoritesPanel({ favorites, onChange, onError, onSynced 
   const [picked, setPicked] = useState("");
   const [bulk, setBulk] = useState("");
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     if (query.trim() === "") {
@@ -37,15 +38,17 @@ export default function FavoritesPanel({ favorites, onChange, onError, onSynced 
       return;
     }
     const timer = setTimeout(() => {
-      getJson<Stock[]>("/api/stocks")
-        .then((all) => {
-          const q = query.trim();
-          setStocks(all.filter((s) => s.code.includes(q) || s.name.includes(q)).slice(0, 20));
+      setSearching(true);
+      getJson<Stock[]>(`/api/stocks/search?q=${encodeURIComponent(query.trim())}`)
+        .then(setStocks)
+        .catch(() => {
+          setStocks([]);
+          onError("全市场搜索失败：行情快照未能加载，请稍后重试");
         })
-        .catch(() => setStocks([]));
-    }, 200);
+        .finally(() => setSearching(false));
+    }, 250);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, onError]);
 
   const add = async (codes: string[]) => {
     if (codes.length === 0) return;
@@ -87,7 +90,7 @@ export default function FavoritesPanel({ favorites, onChange, onError, onSynced 
       <div className="fav-row">
         <div className="fav-search">
           <input
-            placeholder="搜索代码/名称后加入自选"
+            placeholder="搜索全市场代码/名称（5000+ 只），如 600036 或 招商银行"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -107,6 +110,13 @@ export default function FavoritesPanel({ favorites, onChange, onError, onSynced 
                   <span className="code">{s.code}</span>
                 </button>
               ))}
+            </div>
+          )}
+          {searching && stocks.length === 0 && (
+            <div className="fav-dropdown">
+              <button type="button" disabled>
+                正在加载全市场列表，首次约 10 秒…
+              </button>
             </div>
           )}
         </div>
