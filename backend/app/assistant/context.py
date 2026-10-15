@@ -199,11 +199,26 @@ def build_context_text(
 
     n = len(quotes)
     period_lines = []
-    for label, days in (("近5日", 5), ("近20日", 20), ("近60日", 60)):
+    for label, days in (("近5日", 5), ("近20日", 20), ("近60日", 60), ("近120日", 120)):
         if n > days:
             period_lines.append(f"{label}: {_pct(float(last['close']), float(quotes['close'].iloc[-1 - days])):+.2f}%")
     if period_lines:
         lines.append(f"多周期涨跌幅（相对区间起点收盘）:  {'  '.join(period_lines)}")
+
+    # 长周期高低点与发生日期：用户问"三个月/半年算什么浪、趋势如何"时需要可引用的锚点，
+    # 缺了这几行 AI 只能笼统回答"上下文未提供"，答不上趋势判断。
+    # 标签用自然语言窗口（近3个月=约63个交易日），否则用户问"三个月"时 AI 对不上"近250日"这种口径
+    for label, days in (("近1个月", 21), ("近3个月", 63), ("近半年", 126), ("近1年", 250)):
+        if n > days:
+            win = quotes.tail(days)
+            hi_idx = win["high"].idxmax()
+            lo_idx = win["low"].idxmin()
+            lines.append(
+                f"{label}区间高低点: 最高 {float(win.loc[hi_idx, 'high'])}"
+                f"（{_fmt_date(win.loc[hi_idx, 'date'])}）  "
+                f"最低 {float(win.loc[lo_idx, 'low'])}"
+                f"（{_fmt_date(win.loc[lo_idx, 'date'])}）"
+            )
 
     vol_recent = quotes["amount"].tail(5).mean()
     vol_prev = quotes["amount"].iloc[-25:-5].mean() if n >= 25 else float("nan")
@@ -231,12 +246,16 @@ def build_context_text(
         fin_note = "未同步"
     else:
         recent_fin = financials.tail(3)
-        fin_note = str(recent_fin.iloc[-1].get("日期", "未知"))
+        latest_date = recent_fin.iloc[-1].get("日期", "未知")
+        fin_note = "未知" if latest_date != latest_date else str(latest_date)
         lines.append(f"财务数据截至: {fin_note}（按报告期从旧到新列出最近3期）")
         for field in FINANCIAL_FIELDS:
             if field not in financials.columns:
                 continue
-            values = " → ".join(str(v) for v in recent_fin[field].tolist())
+            # NaN 一律显示"数据缺失"：str(nan) 会输出字面量 "nan"，LLM 会把 "nan" 当数字照抄进解读
+            values = " → ".join(
+                "数据缺失" if v != v else str(v) for v in recent_fin[field].tolist()
+            )
             lines.append(f"{field}: {values}")
 
     if watch:

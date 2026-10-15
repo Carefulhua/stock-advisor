@@ -161,3 +161,46 @@ def test_missing_numeric_values_show_marker():
     assert "上榜 数据缺失 次" in text
     assert "龙虎榜净买额 数据缺失" in text
     assert "最近上榜日 未知" in text
+
+
+def test_financial_nan_shows_missing_marker_not_literal_nan():
+    q = make_quotes(60)
+    fin = pd.DataFrame([
+        {"日期": "2026-03-31", "净资产收益率(%)": 10.0, "销售毛利率(%)": float("nan")},
+        {"日期": "2026-06-30", "净资产收益率(%)": 11.5, "销售毛利率(%)": float("nan")},
+        {"日期": "2026-09-30", "净资产收益率(%)": 12.34, "销售毛利率(%)": float("nan")},
+    ])
+    text = build_context_text("300001", q, fin, None)
+
+    assert "nan" not in text.lower()
+    assert "销售毛利率(%): 数据缺失 → 数据缺失 → 数据缺失" in text
+    assert "净资产收益率(%): 10.0 → 11.5 → 12.34" in text
+
+
+def test_financial_nan_date_falls_back_to_unknown():
+    q = make_quotes(60)
+    fin = pd.DataFrame([
+        {"日期": float("nan"), "净资产收益率(%)": 10.0},
+        {"日期": float("nan"), "净资产收益率(%)": 11.5},
+    ])
+    text = build_context_text("300001", q, fin, None)
+
+    assert "财务数据截至: 未知" in text
+    assert "nan" not in text.lower()
+
+
+def test_long_window_high_low_anchors_with_dates():
+    q = make_quotes(130)
+    text = build_context_text("300001", q, pd.DataFrame(), None)
+
+    last = q.iloc[-1]
+    # 单调上涨数据：窗口内最高必为最后一根，故日期应为最后交易日
+    assert (
+        f"近1个月区间高低点: 最高 {last['high']}"
+        f"（{last['date'].strftime('%Y-%m-%d')}）" in text
+    )
+    assert "近3个月区间高低点: 最高" in text
+    assert "近半年区间高低点: 最高" in text
+    assert "近1年区间高低点" not in text
+    assert "近120日:" in text
+
