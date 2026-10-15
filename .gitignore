@@ -11,3 +11,4 @@ node_modules/
 backend/.env
 .e2e-*.png
 tsconfig.tsbuildinfo
+.opencode/project/sessions/
