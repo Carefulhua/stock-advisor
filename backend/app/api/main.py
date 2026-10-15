@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.analysis import bars
 from app.analysis import indicators as ind
-from app.assistant import report as report_mod
+from app.assistant import gates, report as report_mod
 from app.assistant.context import build_context
 from app.assistant.llm import LLMError, complete_chat, stream_chat
 from app.core import config
@@ -320,7 +320,13 @@ def report_generate(code: str) -> dict:
     except LLMError as exc:
         raise HTTPException(status_code=502, detail=f"LLM upstream error: {exc}")
 
-    # 重新生成只替换十节正文，此前追加的解读追踪原样回拼，避免丢失历史解读
+    # 质量门禁：完整性/数值一致性/信息密度任一不达标即拒绝落库，
+    # 返回显式缺失清单，而不是交付一份薄报告或含编造数字的报告
+    problems = gates.validate_report(content, context)
+    if problems:
+        raise HTTPException(status_code=422, detail="；".join(problems))
+
+    # 重新生成只替换六节正文，此前追加的解读追踪原样回拼，避免丢失历史解读
     if existing is not None:
         content = _keep_interpretation_log(content, existing["content"])
     conn = get_conn()
