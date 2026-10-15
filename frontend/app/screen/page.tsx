@@ -176,9 +176,8 @@ export default function ScreenPage() {
         </a>
         <nav className="screen-nav">
           <a href="/">分析</a>
-          <a href="/screen" className="active">
-            选股
-          </a>
+          <a href="/screen" className="active">选股</a>
+          <a href="/learn">学习</a>
         </nav>
         <span className="screen-status">
           {status ? (status.llm_enabled ? "AI 解析可用" : "AI 解析未配置") : "连接中…"}

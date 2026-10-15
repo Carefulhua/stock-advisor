@@ -817,3 +817,105 @@ body {
   font-size: 13px;
   border-left: 3px solid var(--accent);
 }
+
+.learn-page {
+  max-width: 800px;
+  margin: 20px auto;
+  padding: 24px;
+  background: var(--panel);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.learn-page h1 {
+  margin-top: 0;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 20px;
+}
+
+.report-list {
+  margin-top: 24px;
+}
+
+.report-list h3 {
+  margin-top: 0;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.report-list ul {
+  margin-top: 12px;
+}
+
+.report-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.report-list li:hover {
+  color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.report-gen {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.report-gen input {
+  width: 200px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.report-gen button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.report-viewer .report-body {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.report-viewer {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.report-viewer h3 {
+  margin-top: 0;
+  font-size: 18px;
+}
+
+.report-viewer .msg {
+  margin-top: 12px;
+}
+
+.report-viewer button {
+  margin-top: 8px;
+}

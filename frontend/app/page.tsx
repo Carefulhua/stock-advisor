@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { postJson } from "./api";
 import * as echarts from "echarts";
 import ChatPanel from "./ChatPanel";
 import { buildChartOption, IndicatorTab, MaKey, MaVisible, Row } from "./chartOption";
@@ -195,10 +196,18 @@ export default function Home() {
               ))}
             </div>
             {code && (
+            <div>
               <button className="ai-toggle" onClick={() => setChatOpen((v) => !v)}>
                 {chatOpen ? "收起解读" : "AI解读"}
               </button>
-            )}
+              <button className="ai-toggle" onClick={() => {
+                postJson(`/api/report/${code}/generate`, { code });
+                alert("报告生成中，请查看学习页");
+              }}>
+                生成报告
+              </button>
+            </div>
+          )}
           </div>
           {error && <div className="center-msg">{error}</div>}
           {!error && !rows && <div className="center-msg">加载中…</div>}
