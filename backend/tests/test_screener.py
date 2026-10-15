@@ -45,10 +45,10 @@ def test_merge_snapshot_left_joins_on_code():
 
 
 def test_latest_report_period_boundaries():
-    assert screener_run._latest_report_period(date(2026, 4, 30)) == "20251231"
-    assert screener_run._latest_report_period(date(2026, 5, 1)) == "20260331"
-    assert screener_run._latest_report_period(date(2026, 8, 31)) == "20260331"
-    assert screener_run._latest_report_period(date(2026, 9, 1)) == "20260630"
-    assert screener_run._latest_report_period(date(2026, 10, 31)) == "20260630"
-    assert screener_run._latest_report_period(date(2026, 11, 1)) == "20260930"
-    assert screener_run._latest_report_period(date(2026, 10, 12)) == "20260630"
+    assert screener_run.latest_report_period(date(2026, 4, 30)) == "20251231"
+    assert screener_run.latest_report_period(date(2026, 5, 1)) == "20260331"
+    assert screener_run.latest_report_period(date(2026, 8, 31)) == "20260331"
+    assert screener_run.latest_report_period(date(2026, 9, 1)) == "20260630"
+    assert screener_run.latest_report_period(date(2026, 10, 31)) == "20260630"
+    assert screener_run.latest_report_period(date(2026, 11, 1)) == "20260930"
+    assert screener_run.latest_report_period(date(2026, 10, 12)) == "20260630"

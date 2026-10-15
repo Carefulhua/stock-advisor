@@ -80,3 +80,84 @@ def test_streak_and_zone_helpers():
 def test_empty_quotes_raises():
     with pytest.raises(ValueError):
         build_context_text("000000", pd.DataFrame(columns=QUOTE_COLUMNS), pd.DataFrame(), None)
+
+
+def _extra(**overrides) -> dict:
+    data = {
+        "comment": {
+            "综合得分": 61.09, "机构参与度": 0.36882, "主力成本": 21.73,
+            "关注指数": 96.0, "目前排名": 3244.0, "市盈率": -31.75,
+        },
+        "lhb": {
+            "最近上榜日": "2026-10-08", "上榜次数": 3,
+            "龙虎榜净买额": 402660474.63, "机构买入净额": 0.0,
+            "近1个月涨跌幅": 19.88360815,
+        },
+        "dzjy": {
+            "笔数": 1, "成交额合计": 4003500.0, "平均折溢率": 0.0,
+            "最近交易日期": "2026-08-05", "最近成交价": 25.5, "最近收盘价": 25.5,
+            "最近买方营业部": "A营业部", "最近卖方营业部": "B营业部",
+        },
+        "forecast": {
+            "报告期": "20260630", "预测指标": "归属于上市公司股东的净利润",
+            "预告类型": "减亏", "业绩变动幅度": 4.25, "预测数值": -740000000.0,
+            "上年同期值": -772811700.0, "业绩变动原因": "(一)销量同比下滑。",
+            "公告日期": "2026-07-09",
+        },
+    }
+    data.update(overrides)
+    return data
+
+
+def test_capital_and_event_sections_when_extra_provided():
+    q = make_quotes(60)
+    text = build_context_text("600418", q, pd.DataFrame(), None, _extra())
+
+    assert "## 资金面" in text and "## 事件面" in text
+    assert "千股千评: 综合得分 61.09" in text
+    assert "机构参与度 0.3688" in text
+    assert "主力成本 21.73元" in text
+    assert "全市场排名 3244" in text
+    assert "龙虎榜(近一月统计): 上榜 3 次" in text
+    assert "最近上榜日 2026-10-08" in text
+    assert "龙虎榜净买额 4.03亿元" in text
+    assert "近1个月涨跌幅 19.88%" in text
+    assert "大宗交易(近90日): 1 笔" in text
+    assert "成交额合计 400.35万元" in text
+    assert "平均折溢率 0.00%" in text
+    assert "业绩预告(报告期 20260630, 公告日 2026-07-09)" in text
+    assert "预告类型「减亏」" in text
+    assert "预计值 -7.40亿元" in text
+    assert "上年同期 -7.73亿元" in text
+    assert "变动幅度 4.25%" in text
+    assert "业绩变动原因: (一)销量同比下滑。" in text
+
+
+def test_no_capital_sections_without_extra():
+    q = make_quotes(60)
+    text = build_context_text("600418", q, pd.DataFrame(), None)
+    assert "## 资金面" not in text
+    assert "## 事件面" not in text
+
+
+def test_capital_sections_fall_back_when_all_sources_empty():
+    q = make_quotes(60)
+    empty = {key: None for key in ("comment", "lhb", "dzjy", "forecast")}
+    text = build_context_text("600418", q, pd.DataFrame(), None, empty)
+
+    assert "千股千评: 无该股数据" in text
+    assert "龙虎榜(近一月统计): 无上榜记录" in text
+    assert "大宗交易(近90日): 无记录" in text
+    assert "业绩预告: 无该股数据" in text
+
+
+def test_missing_numeric_values_show_marker():
+    q = make_quotes(60)
+    text = build_context_text(
+        "600418", q, pd.DataFrame(), None,
+        _extra(lhb={"最近上榜日": "", "上榜次数": None, "龙虎榜净买额": None,
+                    "机构买入净额": None, "近1个月涨跌幅": None}),
+    )
+    assert "上榜 数据缺失 次" in text
+    assert "龙虎榜净买额 数据缺失" in text
+    assert "最近上榜日 未知" in text

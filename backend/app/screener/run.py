@@ -23,7 +23,7 @@ DISPLAY_COLUMNS = [
 ]
 
 
-def _latest_report_period(today: date) -> str:
+def latest_report_period(today: date) -> str:
     """推断最近已披露报告期(YYYYMMDD)。披露截止：一季报4/30、中报8/31、三季报10/31。"""
     y = today.year
     md = (today.month, today.day)
@@ -44,7 +44,7 @@ def load_merged_market(report_period: str | None = None) -> tuple[pd.DataFrame, 
     """
     snap = snapshot.market_snapshot_cached()
     listing = snapshot.fetch_listing_dates()
-    period = report_period or _latest_report_period(date.today())
+    period = report_period or latest_report_period(date.today())
     earnings = snapshot.fetch_earnings_growth(period)
     fields.set_industry_options(
         sorted({str(v) for v in snap["industry"].dropna()}) if "industry" in snap.columns else []

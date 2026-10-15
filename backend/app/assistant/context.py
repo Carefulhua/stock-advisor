@@ -4,6 +4,7 @@ from __future__ import annotations
 import pandas as pd
 
 from app.analysis import indicators as ind
+from app.assistant import fundamentals
 from app.data.storage import QUOTE_COLUMNS, get_conn, read_financials, read_quotes
 
 FINANCIAL_FIELDS = [
@@ -71,11 +72,85 @@ def _zone_kdj_j(value: float) -> str:
     return "J值处于0-100之间"
 
 
+def _fmt_num(value: float | None, spec: str = ".2f") -> str:
+    return "数据缺失" if value is None else format(value, spec)
+
+
+def _money(value: float | None) -> str:
+    """把元换算成亿元/万元，便于 LLM 与人都能秒读的量级。"""
+    if value is None:
+        return "数据缺失"
+    sign = "-" if value < 0 else ""
+    magnitude = abs(value)
+    if magnitude >= 1e8:
+        return f"{sign}{magnitude / 1e8:.2f}亿元"
+    if magnitude >= 1e4:
+        return f"{sign}{magnitude / 1e4:.2f}万元"
+    return f"{sign}{magnitude:.0f}元"
+
+
+def _capital_lines(extra: dict) -> list[str]:
+    comment, lhb, dzjy = extra.get("comment"), extra.get("lhb"), extra.get("dzjy")
+    lines = ["## 资金面"]
+    if comment:
+        lines.append(
+            f"千股千评: 综合得分 {_fmt_num(comment['综合得分'])}  "
+            f"机构参与度 {_fmt_num(comment['机构参与度'], '.4f')}  "
+            f"主力成本 {_fmt_num(comment['主力成本'])}元  "
+            f"市场关注指数 {_fmt_num(comment['关注指数'], '.0f')}  "
+            f"全市场排名 {_fmt_num(comment['目前排名'], '.0f')}  "
+            f"市盈率 {_fmt_num(comment['市盈率'])}"
+        )
+    else:
+        lines.append("千股千评: 无该股数据")
+    if lhb:
+        lines.append(
+            f"龙虎榜(近一月统计): 上榜 {_fmt_num(lhb['上榜次数'], '.0f')} 次, "
+            f"最近上榜日 {lhb['最近上榜日'] or '未知'}, "
+            f"龙虎榜净买额 {_money(lhb['龙虎榜净买额'])}, "
+            f"机构买入净额 {_money(lhb['机构买入净额'])}, "
+            f"近1个月涨跌幅 {_fmt_num(lhb['近1个月涨跌幅'])}%"
+        )
+    else:
+        lines.append("龙虎榜(近一月统计): 无上榜记录")
+    if dzjy:
+        lines.append(
+            f"大宗交易(近{fundamentals.DZJY_WINDOW_DAYS}日): {dzjy['笔数']} 笔, "
+            f"成交额合计 {_money(dzjy['成交额合计'])}, "
+            f"平均折溢率 {_fmt_num(dzjy['平均折溢率'])}%, "
+            f"最近 {dzjy['最近交易日期']} 成交价 {_fmt_num(dzjy['最近成交价'])} "
+            f"对收盘价 {_fmt_num(dzjy['最近收盘价'])}"
+        )
+    else:
+        lines.append(f"大宗交易(近{fundamentals.DZJY_WINDOW_DAYS}日): 无记录")
+    return lines
+
+
+def _event_lines(extra: dict) -> list[str]:
+    forecast = extra.get("forecast")
+    lines = ["## 事件面"]
+    if not forecast:
+        lines.append("业绩预告: 无该股数据")
+        return lines
+    lines.append(
+        f"业绩预告(报告期 {forecast['报告期']}, 公告日 {forecast['公告日期'] or '未知'}): "
+        f"{forecast['预测指标'] or '未披露指标'}, "
+        f"预告类型「{forecast['预告类型'] or '未披露'}」, "
+        f"预计值 {_money(forecast['预测数值'])}, "
+        f"上年同期 {_money(forecast['上年同期值'])}, "
+        f"变动幅度 {_fmt_num(forecast['业绩变动幅度'])}%"
+    )
+    reason = forecast["业绩变动原因"]
+    lines.append(f"业绩变动原因: {reason}" if reason else "业绩变动原因: 未披露")
+    return lines
+
+
 def build_context_text(
     code: str,
     quotes: pd.DataFrame,
     financials: pd.DataFrame,
     watch: dict | None,
+    extra: dict | None = None,
 ) -> str:
     if quotes.empty:
         raise ValueError(f"no quotes for {code}")
@@ -169,6 +244,10 @@ def build_context_text(
     else:
         lines.append(f"## 自选池\n{WATCH_HINT}")
 
+    if extra:
+        lines.extend(_capital_lines(extra))
+        lines.extend(_event_lines(extra))
+
     lines.append(f"数据截至 {last_date}，财务数据截至 {fin_note}。")
     return "\n".join(lines)
 
@@ -186,4 +265,4 @@ def build_context(code: str) -> str:
     watch = None
     if not watch_df.empty:
         watch = {"score": watch_df.iloc[0]["score"], "rank": watch_df.iloc[0]["rank"]}
-    return build_context_text(code, quotes, financials, watch)
+    return build_context_text(code, quotes, financials, watch, fundamentals.collect(code))
