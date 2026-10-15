@@ -140,6 +140,7 @@ export default function Home() {
             分析
           </a>
           <a href="/screen">选股</a>
+          <a href="/learn">学习</a>
         </nav>
         <div className="search-wrap">
           <input
