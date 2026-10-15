@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Literal
 
 import pandas as pd
@@ -15,8 +16,9 @@ from pydantic import BaseModel, Field
 
 from app.analysis import bars
 from app.analysis import indicators as ind
+from app.assistant import report as report_mod
 from app.assistant.context import build_context
-from app.assistant.llm import LLMError, stream_chat
+from app.assistant.llm import LLMError, complete_chat, stream_chat
 from app.core import config
 from app.core.config import CHAT_HISTORY_LIMIT, GLM_API_KEY
 from app.data import fetchers_baostock
@@ -24,13 +26,16 @@ from app.data.storage import (
     add_favorites,
     append_chat_messages,
     get_conn,
+    list_reports,
     list_stocks,
     read_chat_messages,
     read_favorites,
     read_quotes,
+    read_report,
     read_watchlist,
     remove_favorite,
     replace_watchlist_by_codes,
+    upsert_report,
 )
 from app.screener import fields as field_catalog
 from app.screener import score as screener_score
@@ -248,10 +253,90 @@ def chat(req: ChatRequest) -> Response:
             conn = get_conn()
             try:
                 append_chat_messages(conn, req.code, to_store)
+                existing = read_report(conn, req.code)
+                if existing is not None:
+                    question = last_user.content if last_user else ""
+                    updated = report_mod.append_interpretation(
+                        existing["content"],
+                        question,
+                        reply,
+                        datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    )
+                    upsert_report(conn, req.code, existing["name"], updated)
             finally:
                 conn.close()
 
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+def _stock_name(conn: sqlite3.Connection, code: str) -> str:
+    row = conn.execute("SELECT name FROM stocks WHERE code = ?", (code,)).fetchone()
+    return str(row["name"]) if row else code
+
+
+@app.get("/api/reports")
+def reports() -> list[dict]:
+    """全部研究报告（代码/名称/更新时间，倒序）。"""
+    conn = get_conn()
+    try:
+        return list_reports(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/api/report/{code}")
+def report_get(code: str) -> dict:
+    """单只股票的研究报告，未生成则 404。"""
+    conn = get_conn()
+    try:
+        report = read_report(conn, code)
+    finally:
+        conn.close()
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"no report for {code}")
+    return report
+
+
+@app.post("/api/report/{code}/generate")
+def report_generate(code: str) -> dict:
+    """基于模板生成十节研究报告并存库（按 code 覆盖，含既有解读追踪）。"""
+    if not GLM_API_KEY:
+        raise HTTPException(status_code=503, detail="服务端未配置 GLM_API_KEY")
+    conn = get_conn()
+    try:
+        row = conn.execute("SELECT name FROM stocks WHERE code = ?", (code,)).fetchone()
+        name = str(row[0]) if row else code
+        existing = read_report(conn, code)
+    finally:
+        conn.close()
+    try:
+        context = build_context(code)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"no quotes for {code}")
+
+    messages = report_mod.build_report_messages(context, name, code)
+    try:
+        content = complete_chat(messages, api_key=GLM_API_KEY)
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=f"LLM upstream error: {exc}")
+
+    # 重新生成只替换十节正文，此前追加的解读追踪原样回拼，避免丢失历史解读
+    if existing is not None:
+        content = _keep_interpretation_log(content, existing["content"])
+    conn = get_conn()
+    try:
+        upsert_report(conn, code, name, content)
+    finally:
+        conn.close()
+    return {"code": code, "name": name, "content": content}
+
+
+def _keep_interpretation_log(new_content: str, old_content: str) -> str:
+    """把旧报告的解读追踪区回拼到新报告末尾（没有则原样返回）。"""
+    index = old_content.find(report_mod.INTERPRETATION_HEADING)
+    if index < 0:
+        return new_content
+    return new_content.rstrip() + "\n\n" + old_content[index:].lstrip()
 
 
 class ParseRequest(BaseModel):

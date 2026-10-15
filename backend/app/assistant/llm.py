@@ -86,3 +86,15 @@ def _default_key() -> str:
     from app.core import config
 
     return config.GLM_API_KEY
+
+
+def complete_chat(messages: list[dict], api_key: str | None = None) -> str:
+    """非流式对话：收集完整回复文本。
+
+    研究报告是一次性整段产出（无需边收边渲染），故复用 stream_chat 收集后返回，
+    不另写一套请求逻辑。
+    """
+    key = api_key if api_key is not None else _default_key()
+    if not key:
+        raise LLMError("GLM_API_KEY not configured")
+    return "".join(stream_chat(messages, api_key=key))

@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS chat_history (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_chat_history_code ON chat_history(code, id);
+CREATE TABLE IF NOT EXISTS reports (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 CHAT_STORE_LIMIT = 200  # 每只股票最多保留的对话条数（滚动裁剪最旧）
@@ -57,6 +64,7 @@ def get_conn(db_path: Path | None = None) -> sqlite3.Connection:
     path = db_path or config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     return conn
 
@@ -288,6 +296,45 @@ def append_chat_messages(conn: sqlite3.Connection, code: str, messages: list[dic
             (normalized, normalized, CHAT_STORE_LIMIT),
         )
     return len(rows)
+
+
+def upsert_report(
+    conn: sqlite3.Connection, code: str, name: str, content: str
+) -> bool:
+    """写入个股研究报告 (按 code 覆盖)。首次插入保留 created_at。"""
+    normalized = _normalize_code(code)
+    if normalized is None or not content:
+        return False
+    with conn:
+        conn.execute(
+            "INSERT INTO reports(code, name, content) VALUES(?, ?, ?) "
+            "ON CONFLICT(code) DO UPDATE SET "
+            "name=excluded.name, content=excluded.content, "
+            "updated_at=datetime('now')",
+            (normalized, str(name), str(content)),
+        )
+    return True
+
+
+def read_report(conn: sqlite3.Connection, code: str) -> dict | None:
+    """单只股票的研究报告，无则返回 None。"""
+    normalized = _normalize_code(code)
+    if normalized is None:
+        return None
+    row = conn.execute(
+        "SELECT code, name, content, created_at, updated_at "
+        "FROM reports WHERE code = ?",
+        (normalized,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_reports(conn: sqlite3.Connection) -> list[dict]:
+    """全部研究报告，按更新时间倒序。"""
+    rows = conn.execute(
+        "SELECT code, name, updated_at FROM reports ORDER BY updated_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def read_chat_messages(conn: sqlite3.Connection, code: str, limit: int = 50) -> list[dict]:
