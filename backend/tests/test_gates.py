@@ -2,7 +2,11 @@ import pytest
 
 from app.assistant import gates
 
-CONTEXT = """## 行情摘要（600418，近20个交易日）
+CONTEXT = """## 公司业务
+主营业务: 乘用车、商用车、客车、底盘等的研发、生产和销售。
+主要产品: 整车与底盘部件
+
+## 行情摘要（600418，近20个交易日）
 区间涨跌幅: 12.36%  区间最高: 24.72  区间最低: 12.0
 日均成交额: 3273000000元（约32.73亿元）
 ## 技术指标
@@ -24,27 +28,31 @@ MA5=24.123  MA10=22.100
 
 GOOD_REPORT = """# 江淮汽车（600418）研究报告
 
-## 一、投资要点
+## 一、公司概况
+主营业务为乘用车、商用车、客车、底盘等的研发、生产和销售。
+主要产品包括各类整车与底盘部件。
+
+## 二、投资要点
 近20个交易日区间涨跌幅 12.36%，最新收盘 24.72元。
 MACD 柱体变化、RSI14、均线排列见下节。
 
-## 二、技术与量价
+## 三、技术与量价
 MA5=24.123 高于 MA20，均线呈多头排列。最新单日换手率与近5日量能比如下：
 近5日 vs 前20日量能比值 2.10。
 
-## 三、量能与资金面
+## 四、量能与资金面
 千股千评综合得分 61.09，机构参与度 0.3688，主力成本 21.73元，全市场排名 3244。
 龙虎榜近一月上榜 3 次，净买额 4.03亿元，最近上榜日 2026-10-08。
 大宗交易近90日 1 笔，成交额合计 400.35万元，平均折溢率 0.00%。
 
-## 四、财务分析与业绩预告
+## 五、财务分析与业绩预告
 净资产收益率 -6.03%，销售净利率 -3.27%，资产负债率 72.45%，每股收益 1.32元。
 业绩预告为减亏，预计值 -7.40亿元，上年同期 -7.73亿元，变动幅度 +4.25%。
 
-## 五、风险提示
+## 六、风险提示
 - 资产负债率 72.45% 偏高，偿债压力需跟踪。
 
-## 六、结论
+## 七、结论
 综合来看，基本面仍处修复初期，可跟踪三个信号：预告准确性、龙虎榜资金持续性、量能比值。
 """
 
@@ -54,12 +62,12 @@ def _pad(text: str, target: int) -> str:
     return text + "\n" + filler
 
 
-def test_completeness_accepts_all_six_sections():
+def test_completeness_accepts_all_seven_sections():
     assert gates.check_completeness(GOOD_REPORT) == []
 
 
 def test_completeness_reports_missing_sections():
-    partial = GOOD_REPORT.replace("## 六、结论", "")
+    partial = GOOD_REPORT.replace("## 七、结论", "")
     problems = gates.check_completeness(partial)
     assert len(problems) == 1
     assert "1" in problems[0]

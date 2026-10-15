@@ -58,7 +58,10 @@ def _text(value: object) -> str:
 
 
 def collect(code: str) -> dict:
-    """按 code 采集四个补充数据源；单个来源失败只记日志，不阻塞其余来源。"""
+    """按 code 采集补充数据源；单个来源失败只记日志，不阻塞其余来源。
+
+    前四个源是全市场单次拉取后按 code 过滤；business 是逐股接口，需单独请求。
+    """
     normalized = str(code).strip().zfill(6)
     data: dict[str, object] = {}
     for key, loader in (
@@ -66,6 +69,7 @@ def collect(code: str) -> dict:
         ("lhb", _lhb_of),
         ("dzjy", _dzjy_of),
         ("forecast", _forecast_of),
+        ("business", _business_of),
     ):
         try:
             data[key] = loader(normalized)
@@ -168,4 +172,20 @@ def _forecast_of(code: str) -> dict | None:
         "上年同期值": _num(row.get("上年同期值")),
         "业绩变动原因": _text(row.get("业绩变动原因")),
         "公告日期": _text(row.get("公告日期")),
+    }
+
+
+def _business_of(code: str) -> dict | None:
+    """公司主营业务与经营范围（ths 逐股接口，非全市场）。"""
+    rows = _with_retry(ak.stock_zyjs_ths, symbol=code)
+    if rows.empty:
+        return None
+    row = rows.iloc[0]
+    business = _text(row.get("主营业务"))
+    scope = _text(row.get("经营范围"))
+    products = _text(row.get("产品名称")) or _text(row.get("产品类型"))
+    return {
+        "主营业务": business,
+        "产品": products,
+        "经营范围": scope,
     }

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import re
 
-# 六节模板的章节标题正则。generate 时模板固定，故只需匹配序号前缀。
-SECTION_PATTERN = re.compile(r"^##\s*[一二三四五六]、", re.MULTILINE)
+# 七节模板的章节标题正则。generate 时模板固定，故只需匹配序号前缀。
+SECTION_PATTERN = re.compile(r"^##\s*[一二三四五六七]、", re.MULTILINE)
 
-EXPECTED_SECTIONS = 6
+EXPECTED_SECTIONS = 7
 
 # context.py 实际能提供的上下文节，与 build_context_text 的输出一一对应。
 CONTEXT_SECTIONS = [
@@ -32,9 +32,11 @@ PERCENT_PATTERN = re.compile(r"-?[\d,]+(?:\.\d+)?\s*\)?\s*%")
 # 的括号里而非数字之后，故需额外匹配这种顺序，否则整个财务摘要进不了校验池。
 LABELLED_NUMBER_PATTERN = re.compile(r"\((?:%|元)\)\s*[:：]?\s*(?P<value>-?[\d,]+(?:\.\d+)?)")
 
-# Kenneth2378 depth gate 阈值：1500 字模板下，低于 800 字或带单位数字少于 12 个视为薄报告。
+# Kenneth2378 depth gate 阈值：1500 字模板下，低于 800 字或带单位数字少于 10 个视为薄报告。
+# 新增公司概况节（几乎不含数字）后按六节校准的 12 个下限过紧，002155 这类
+# 数字天然偏少的股票会被误拦，故按七节重新校准为 10。
 MIN_CHARS = 800
-MIN_NUMBER_COUNT = 12
+MIN_NUMBER_COUNT = 10
 
 TOLERANCE = 0.02
 
@@ -93,11 +95,11 @@ def _parse_context_numbers(context: str) -> tuple[set[float], set[float], set[fl
 
 
 def check_completeness(content: str) -> list[str]:
-    """equity-researcher 13 项检查的代码化：报告必须包含全部六节标题。"""
+    """equity-researcher 13 项检查的代码化：报告必须包含全部七节标题。"""
     found = SECTION_PATTERN.findall(content)
     missing = EXPECTED_SECTIONS - len(found)
     if missing > 0:
-        return [f"报告缺少 {missing} 个章节（应为六节，实际 {len(found)} 节）"]
+        return [f"报告缺少 {missing} 个章节（应为{EXPECTED_SECTIONS}节，实际 {len(found)} 节）"]
     return []
 
 

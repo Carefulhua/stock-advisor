@@ -145,6 +145,20 @@ def _event_lines(extra: dict) -> list[str]:
     return lines
 
 
+def _business_lines(extra: dict) -> list[str]:
+    business = extra.get("business")
+    lines = ["## 公司业务"]
+    if not business or not business.get("主营业务"):
+        lines.append("主营业务: 无该股数据")
+        return lines
+    lines.append(f"主营业务: {business['主营业务']}")
+    if business.get("产品"):
+        lines.append(f"主要产品: {business['产品']}")
+    if business.get("经营范围"):
+        lines.append(f"经营范围: {business['经营范围']}")
+    return lines
+
+
 def build_context_text(
     code: str,
     quotes: pd.DataFrame,
@@ -159,7 +173,11 @@ def build_context_text(
     last = recent.iloc[-1]
     last_date = _fmt_date(last["date"])
 
-    lines = [f"## 行情摘要（{code}，近20个交易日）", "日期 | 收盘 | 涨跌幅%"]
+    lines: list[str] = []
+    if extra:
+        lines.extend(_business_lines(extra))
+    lines.append(f"## 行情摘要（{code}，近20个交易日）")
+    lines.append("日期 | 收盘 | 涨跌幅%")
     for _, row in recent.iterrows():
         lines.append(
             f"{_fmt_date(row['date'])} | {row['close']} | {row['pct_chg']:.2f}"

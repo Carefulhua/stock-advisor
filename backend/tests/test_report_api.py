@@ -21,24 +21,27 @@ CONTEXT = """## 行情摘要（600418，近20个交易日）
 
 GOOD_REPORT = """# 江淮汽车（600418）研究报告
 
-## 一、投资要点
+## 一、公司概况
+主营业务为乘用车、商用车、客车、底盘等的研发、生产和销售，主要产品为整车与底盘部件。
+
+## 二、投资要点
 近20个交易日区间涨跌幅 12.36%，日均成交额 32.73亿元。
 
-## 二、技术与量价
+## 三、技术与量价
 均线排列与 MACD、RSI14、KDJ 区间见上下文。
 
-## 三、量能与资金面
+## 四、量能与资金面
 主力成本 21.73元，龙虎榜净买额 4.03亿元，大宗交易成交额合计 400.35万元。
 区间日均成交额 32.73亿元，主力成本 21.73元，龙虎榜净买额 4.03亿元。
 
-## 四、财务分析与业绩预告
+## 五、财务分析与业绩预告
 净资产收益率 -6.03%，资产负债率 72.45%，每股收益 1.32元。
 业绩预告预计值 -7.40亿元，变动幅度 +4.25%。
 
-## 五、风险提示
+## 六、风险提示
 - 资产负债率 72.45% 偏高，需跟踪偿债压力。
 
-## 六、结论
+## 七、结论
 基本面仍处修复初期，可跟踪预告准确性、资金持续性、量能比值三个信号。
 """
 
@@ -70,7 +73,7 @@ def test_generate_persists_and_returns_report(client, ready):
     assert resp.status_code == 200
     body = resp.json()
     assert body["code"] == "600418"
-    assert "## 六、结论" in body["content"]
+    assert "## 七、结论" in body["content"]
 
     stored = read_report(get_conn(db), "600418")
     assert stored is not None
@@ -175,7 +178,7 @@ def test_reports_list_and_read(client, monkeypatch):
 
     detail = http.get("/api/report/600418")
     assert detail.status_code == 200
-    assert "## 六、结论" in detail.json()["content"]
+    assert "## 七、结论" in detail.json()["content"]
 
 
 def test_read_missing_report_returns_404(client):
