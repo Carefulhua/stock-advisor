@@ -277,10 +277,15 @@ def _stock_name(conn: sqlite3.Connection, code: str) -> str:
 
 @app.get("/api/reports")
 def reports() -> list[dict]:
-    """全部研究报告（代码/名称/更新时间，倒序）。"""
+    """已生成报告 + 自选中尚未生成的股票（并集，按更新时间倒序）。"""
     conn = get_conn()
     try:
-        return list_reports(conn)
+        items = list_reports(conn)
+        done = {r["code"] for r in items}
+        for code, name in read_favorites(conn)[["code", "name"]].itertuples(index=False):
+            if code not in done:
+                items.append({"code": code, "name": name, "updated_at": None})
+        return items
     finally:
         conn.close()
 

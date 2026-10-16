@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { getJson, postJson } from "../api";
 
-type ReportItem = { code: string; name: string; updated_at: string };
+type ReportItem = { code: string; name: string; updated_at: string | null };
 type LoadedReport = ReportItem & { content: string };
 
 type ViewState =
@@ -103,8 +103,9 @@ export default function LearnPage() {
                 <li key={r.code} onClick={() => openReport(r.code)}>
                   <span>
                     {r.code} - {r.name || r.code}
+                    {!r.updated_at && <em className="tag-missing">未生成</em>}
                   </span>
-                  <span className="muted">{r.updated_at}</span>
+                  <span className="muted">{r.updated_at ?? "自选"}</span>
                 </li>
               ))}
             </ul>

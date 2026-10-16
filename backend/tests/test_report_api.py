@@ -4,9 +4,12 @@ from fastapi.testclient import TestClient
 
 from app.api import main as main_mod
 from app.assistant import gates, report as report_mod
-from app.data.storage import get_conn, read_report, upsert_stocks
+from app.data.storage import add_favorites, get_conn, read_report, upsert_stocks
 
-CONTEXT = """## 行情摘要（600418，近20个交易日）
+CONTEXT = """## 公司业务
+主营业务: 乘用车、商用车、客车、底盘等的研发、生产和销售。
+
+## 行情摘要（600418，近20个交易日）
 区间涨跌幅: 12.36%
 日均成交额: 3273000000元（约32.73亿元）
 ## 财务摘要
@@ -179,6 +182,26 @@ def test_reports_list_and_read(client, monkeypatch):
     detail = http.get("/api/report/600418")
     assert detail.status_code == 200
     assert "## 七、结论" in detail.json()["content"]
+
+
+def test_reports_union_includes_unreported_favorites(client, monkeypatch):
+    http, db = client
+    upsert_stocks(
+        get_conn(db),
+        pd.DataFrame([
+            {"code": "600418", "name": "江淮汽车"},
+            {"code": "600132", "name": "重庆啤酒"},
+        ]),
+    )
+    add_favorites(get_conn(db), [("600132", "重庆啤酒")])
+
+    listing = http.get("/api/reports")
+    assert listing.status_code == 200
+    by_code = {r["code"]: r for r in listing.json()}
+    # 未生成的自选也在列表里，且以 updated_at=None 标识
+    assert "600132" in by_code
+    assert by_code["600132"]["updated_at"] is None
+    assert "600418" not in by_code  # 该测试没生成过报告
 
 
 def test_read_missing_report_returns_404(client):
