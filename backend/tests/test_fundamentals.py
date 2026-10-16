@@ -6,7 +6,7 @@ import pytest
 from app.assistant import fundamentals
 from app.screener.run import latest_report_period
 
-SECTION_KEYS = ("comment", "lhb", "dzjy", "forecast")
+SECTION_KEYS = ("comment", "lhb", "dzjy", "forecast", "business")
 
 
 @pytest.fixture(autouse=True)
@@ -97,8 +97,16 @@ def _forecast_frame() -> pd.DataFrame:
     )
 
 
+def _business_value() -> dict:
+    return {
+        "主营业务": "乘用车、商用车、客车、底盘等的研发、生产和销售。",
+        "产品": "整车与底盘部件",
+        "经营范围": "汽车零部件及配件制造",
+    }
+
+
 def _patch_sections(monkeypatch, **frames: pd.DataFrame) -> dict[str, int]:
-    """把四个 _fetch_xxx 替换为返回固定 frame 的桩，返回真实拉取次数计数器。"""
+    """把 _fetch_xxx 替换为返回固定 frame 的桩，business 单独 patch，返回拉取计数器。"""
     defaults = {
         "comment": _comment_frame(),
         "lhb": _lhb_frame(),
@@ -106,6 +114,13 @@ def _patch_sections(monkeypatch, **frames: pd.DataFrame) -> dict[str, int]:
         "forecast": _forecast_frame(),
     }
     calls = {key: 0 for key in SECTION_KEYS}
+    business = frames.pop("business", _business_value())
+
+    def fetch_business(code: str) -> dict | None:
+        calls["business"] += 1
+        return business if code == "600418" else None
+
+    monkeypatch.setattr(fundamentals, "_business_of", fetch_business)
 
     for key, frame in {**defaults, **frames}.items():
         def make(key: str = key, frame: pd.DataFrame = frame):
@@ -134,6 +149,8 @@ def test_collect_returns_all_sections_with_real_values(monkeypatch):
     assert data["dzjy"]["最近交易日期"] == "2026-08-05"
     assert data["forecast"]["预告类型"] == "减亏"
     assert data["forecast"]["预测数值"] == pytest.approx(-760000000.0)
+    assert data["business"]["主营业务"].startswith("乘用车")
+    assert data["business"]["产品"] == "整车与底盘部件"
 
 
 def test_collect_normalizes_query_code(monkeypatch):
@@ -173,10 +190,13 @@ def test_single_source_failure_does_not_block_others(monkeypatch):
 
 
 def test_full_market_frames_are_fetched_once_per_day(monkeypatch):
+    """四个全市场源同日跨 code 只拉一次；business 是逐股接口，每 code 各拉一次。"""
     calls = _patch_sections(monkeypatch)
     fundamentals.collect("600418")
     fundamentals.collect("600519")
-    assert all(count == 1 for count in calls.values())
+    for key in ("comment", "lhb", "dzjy", "forecast"):
+        assert calls[key] == 1, f"{key} fetched {calls[key]} times"
+    assert calls["business"] == 2
 
 
 def test_forecast_picks_latest_announcement(monkeypatch):
@@ -198,6 +218,44 @@ def test_dzjy_single_trade_aggregate(monkeypatch):
     assert data["dzjy"]["平均折溢率"] == pytest.approx(0.4)
     assert data["dzjy"]["最近交易日期"] == "2026-08-01"
 
+
+
+def test_core_scope_strips_registration_boilerplate():
+    raw = (
+        "许可项目：矿产资源勘查；非煤矿山矿产资源开采；测绘服务；黄金及其制品进出口。"
+        "（依法须经批准的项目，经相关部门批准后方可开展经营活动，具体经营项目以相关部门批准文件或许可证件为准）"
+        "一般项目：选矿；矿物洗选加工；有色金属铸造。"
+    )
+    scope = fundamentals._core_scope(raw)
+    assert "依法须经批准" not in scope
+    assert "一般项目" not in scope
+    assert "矿产资源勘查" in scope
+    assert len(scope) < len(raw)
+
+
+def test_core_scope_falls_back_when_split_leaves_too_little():
+    assert fundamentals._core_scope("") == ""
+    assert fundamentals._core_scope("太短") == "太短"
+
+
+def test_business_source_failure_does_not_block_others(monkeypatch):
+    _patch_sections(monkeypatch)
+
+    def boom(code: str):
+        raise RuntimeError("ths down")
+
+    monkeypatch.setattr(fundamentals, "_business_of", boom)
+    data = fundamentals.collect("600418")
+
+    assert data["business"] is None
+    assert data["comment"]["综合得分"] == pytest.approx(61.09012363)
+    assert data["forecast"]["预告类型"] == "减亏"
+
+
+def test_business_absent_for_unknown_stock(monkeypatch):
+    _patch_sections(monkeypatch, business=None)
+    data = fundamentals.collect("600418")
+    assert data["business"] is None
 
 def test_frame_without_code_column_is_skipped(monkeypatch):
     _patch_sections(monkeypatch, comment=pd.DataFrame({"序号": [1], "名称": ["x"]}))

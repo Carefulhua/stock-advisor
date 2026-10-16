@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 
 import akshare as ak
@@ -175,6 +176,16 @@ def _forecast_of(code: str) -> dict | None:
     }
 
 
+def _core_scope(scope: str) -> str:
+    """取工商经营范围的核心句，去掉「依法须经批准的项目…」这类 boilerplate。"""
+    if not scope:
+        return ""
+    head = re.split(r"[。；]\s*（?依法", scope, maxsplit=1)[0]
+    head = head.split("一般项目")[0]
+    head = head.strip(" ；;。")
+    return head if len(head) >= 8 else scope[:120]
+
+
 def _business_of(code: str) -> dict | None:
     """公司主营业务与经营范围（ths 逐股接口，非全市场）。"""
     rows = _with_retry(ak.stock_zyjs_ths, symbol=code)
@@ -187,5 +198,5 @@ def _business_of(code: str) -> dict | None:
     return {
         "主营业务": business,
         "产品": products,
-        "经营范围": scope,
+        "经营范围": _core_scope(scope),
     }
